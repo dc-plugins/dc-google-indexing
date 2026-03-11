@@ -162,6 +162,88 @@ function dc_gi_get_quota_used(): int {
 // ACTIVATION / DEACTIVATION
 // =============================================================================
 
+// =============================================================================
+// FOOTER CREDIT
+// Replaces the first © inside <footer>…</footer> with a linked ©
+// pointing to dampcig.dk. Defers to dc-sw-prefetch if that plugin is active
+// and has its own footer-credit enabled — one link per page.
+// =============================================================================
+
+define( 'DC_GI_FOOTER_TRANSIENT', 'dc_gi_footer_strategy' ); // 'copyright' | 'none'
+
+add_action( 'template_redirect', 'dc_gi_footer_credit_start' );
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_footer_credit_start(): void {
+	if ( is_admin() ) {
+		return;
+	}
+	$settings = dc_gi_get_settings();
+	if ( empty( $settings['footer_credit'] ) ) {
+		return;
+	}
+	// dc-sw-prefetch owns the credit when both plugins are active — avoid duplicates.
+	if ( function_exists( 'dc_swp_footer_credit_start' )
+		&& get_option( 'dampcig_pwa_footer_credit', 'no' ) === 'yes' ) {
+		return;
+	}
+	ob_start( 'dc_gi_footer_credit_process' );
+}
+
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_footer_credit_process( string $html ): string {
+	$link  = '<a href="https://www.dampcig.dk" title="Powered by Dampcig.dk" target="_blank" rel="noopener noreferrer">&copy;</a>';
+	$group = 'dc_gi';
+	$key   = DC_GI_FOOTER_TRANSIENT;
+
+	$strategy = wp_cache_get( $key, $group );
+	if ( false === $strategy ) {
+		$strategy = get_transient( $key );
+	}
+
+	if ( 'copyright' === $strategy ) {
+		return dc_gi_do_copyright_replace( $html, $link );
+	}
+	if ( 'none' === $strategy ) {
+		return $html;
+	}
+
+	$replaced = dc_gi_do_copyright_replace( $html, $link );
+	if ( $replaced !== $html ) {
+		wp_cache_set( $key, 'copyright', $group, WEEK_IN_SECONDS );
+		set_transient( $key, 'copyright', WEEK_IN_SECONDS );
+		return $replaced;
+	}
+
+	wp_cache_set( $key, 'none', $group, WEEK_IN_SECONDS );
+	set_transient( $key, 'none', WEEK_IN_SECONDS );
+	return $html;
+}
+
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_do_copyright_replace( string $html, string $link ): string {
+	if ( ! preg_match( '/(<footer[\s\S]*?<\/footer>)/i', $html, $m, PREG_OFFSET_CAPTURE ) ) {
+		return $html;
+	}
+	$footer_html = $m[0][0];
+	$offset      = $m[0][1];
+	$new_footer  = preg_replace( '/©|&copy;|&#169;|&#xA9;/u', $link, $footer_html, 1, $count );
+	if ( ! $count ) {
+		return $html;
+	}
+	return substr_replace( $html, $new_footer, $offset, strlen( $footer_html ) );
+}
+
+add_action( 'switch_theme', 'dc_gi_clear_footer_cache' );
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_clear_footer_cache(): void {
+	wp_cache_delete( DC_GI_FOOTER_TRANSIENT, 'dc_gi' );
+	delete_transient( DC_GI_FOOTER_TRANSIENT );
+}
+
+// =============================================================================
+// ACTIVATION / DEACTIVATION
+// =============================================================================
+
 register_activation_hook( DC_GI_FILE, 'dc_gi_activate' );
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
 function dc_gi_activate(): void {

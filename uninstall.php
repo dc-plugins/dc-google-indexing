@@ -21,3 +21,7 @@ $wpdb->query( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, Word
 );
 
 wp_clear_scheduled_hook( 'dc_gi_process_queue' );
+
+// Footer credit cache
+delete_transient( 'dc_gi_footer_strategy' );
+wp_cache_delete( 'dc_gi_footer_strategy', 'dc_gi' );

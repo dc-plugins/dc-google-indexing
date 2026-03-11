@@ -90,6 +90,7 @@ function dc_gi_handle_save(): void {
 		'auto_submit'          => ! empty( $_POST['auto_submit'] ) ? 1 : 0,
 		'post_types'           => $post_types,
 		'daily_quota'          => min( 200, max( 1, absint( isset( $_POST['daily_quota'] ) ? wp_unslash( $_POST['daily_quota'] ) : 200 ) ) ),
+		'footer_credit'        => ! empty( $_POST['footer_credit'] ) ? 1 : 0,
 	] );
 
 	wp_safe_redirect( add_query_arg(
@@ -858,6 +859,18 @@ function dc_gi_render_page(): void {
 							min="1" max="200" class="small-text">
 						<p class="description">
 							<?php esc_html_e( 'Maximum submissions per day. Google default is 200 — request a quota increase in Cloud Console if needed.', 'dc-google-indexing' ); ?>
+						</p>
+					</td>
+				</tr>
+				<tr>
+					<th scope="row"><?php esc_html_e( 'Footer Credit', 'dc-google-indexing' ); ?></th>
+					<td>
+						<label>
+							<input type="checkbox" name="footer_credit" value="1" <?php checked( ! empty( $settings['footer_credit'] ) ); ?>>
+							<?php esc_html_e( 'Show some love and support development by adding a small link in the footer', 'dc-google-indexing' ); ?>
+						</label>
+						<p class="description">
+							<?php echo wp_kses_post( __( 'Inserts a discreet <a href="https://www.dampcig.dk" target="_blank" rel="noopener">Dampcig.dk</a> link in the footer by linking the copyright symbol &copy;. Does nothing if your theme has no &copy; in the footer.', 'dc-google-indexing' ) ); ?>
 						</p>
 					</td>
 				</tr>
