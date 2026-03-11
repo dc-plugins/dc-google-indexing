@@ -9,6 +9,8 @@ jobs:
   deploy:
     name: SSH Deploy → dampcig.dk
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
