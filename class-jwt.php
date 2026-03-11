@@ -192,6 +192,12 @@ class DC_GI_JWT {
 			if ( 401 === $code ) {
 				delete_transient( 'dc_gi_access_token' );
 			}
+			if ( 403 === $code && false !== stripos( $msg, 'URL ownership' ) ) {
+				$msg = __(
+					'Permission denied: the service account is not verified as a property owner. Open Search Console → Settings → Users and permissions, add the service account email with Full permission.',
+					'dc-google-indexing'
+				);
+			}
 			return new WP_Error( 'dc_gi_api_error', $msg, [ 'status' => $code ] );
 		}
 

@@ -1416,7 +1416,10 @@ function dc_gi_render_page(): void {
 				</tr>
 			</thead>
 			<tbody>
-				<?php foreach ( $log as $entry ) : ?>
+				<?php foreach ( $log as $entry ) :
+					$is_ownership_err = ( 'error' === $entry['status'] )
+						&& false !== stripos( $entry['detail'], 'URL ownership' );
+				?>
 				<tr>
 					<td><?php echo esc_html( wp_date( 'Y-m-d H:i:s', $entry['time'] ) ); ?></td>
 					<td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="<?php echo esc_attr( $entry['url'] ); ?>">
@@ -1430,7 +1433,16 @@ function dc_gi_render_page(): void {
 							<span style="color:#dc3232;font-weight:600">&#10007; Error</span>
 						<?php endif; ?>
 					</td>
-					<td><?php echo esc_html( $entry['detail'] ); ?></td>
+					<td>
+						<?php if ( $is_ownership_err ) : ?>
+							<span style="color:#dc3232"><?php esc_html_e( 'Permission denied: service account not verified as property owner.', 'dc-google-indexing' ); ?></span>
+							<a href="<?php echo esc_url( add_query_arg( [ 'page' => 'dc-google-indexing', 'tab' => 'start' ], admin_url( 'admin.php' ) ) ); ?>#step-4" style="margin-left:6px;white-space:nowrap">
+								<?php esc_html_e( '→ Fix: Step 4', 'dc-google-indexing' ); ?>
+							</a>
+						<?php else : ?>
+							<?php echo esc_html( $entry['detail'] ); ?>
+						<?php endif; ?>
+					</td>
 				</tr>
 				<?php endforeach; ?>
 			</tbody>
