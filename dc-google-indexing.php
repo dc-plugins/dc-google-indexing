@@ -22,6 +22,7 @@ define( 'DC_GI_VERSION',     '1.0.0' );
 define( 'DC_GI_FILE',        __FILE__ );
 define( 'DC_GI_DIR',         plugin_dir_path( __FILE__ ) );
 define( 'DC_GI_CRON_HOOK',   'dc_gi_process_queue' );
+define( 'DC_GI_WATCH_HOOK',  'dc_gi_check_watchlist' );
 define( 'DC_GI_DAILY_CAP',   200 );
 
 require_once DC_GI_DIR . 'class-jwt.php';
@@ -39,6 +40,12 @@ function dc_gi_cron_schedules( array $schedules ): array {
 		$schedules['dc_gi_every5'] = [
 			'interval' => 300,
 			'display'  => __( 'Every 5 Minutes (DC Google Indexing)', 'dc-google-indexing' ),
+		];
+	}
+	if ( ! isset( $schedules['dc_gi_sixhourly'] ) ) {
+		$schedules['dc_gi_sixhourly'] = [
+			'interval' => 6 * HOUR_IN_SECONDS,
+			'display'  => __( 'Every 6 Hours (DC Google Indexing)', 'dc-google-indexing' ),
 		];
 	}
 	return $schedules;
@@ -143,6 +150,110 @@ function dc_gi_add_log( string $url, string $type, $result ): void {
 			: ( $result['urlNotificationMetadata']['latestUpdate']['type'] ?? 'submitted' ),
 	] );
 	update_option( 'dc_gi_log', array_slice( $log, 0, 100 ), false );
+
+	// On successful submission, add to watchlist so we can track when Google indexes it.
+	if ( ! is_wp_error( $result ) && 'URL_DELETED' !== $type ) {
+		dc_gi_watchlist_add( $url );
+	}
+}
+
+// =============================================================================
+// WATCHLIST — track submitted URLs until Google indexes them
+// =============================================================================
+
+/**
+ * Add a URL to the watchlist (idempotent — won't duplicate).
+ * Status: 'pending' → 'indexed' once Google confirms.
+ */
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_watchlist_add( string $url ): void {
+	$list = get_option( 'dc_gi_watchlist', [] );
+	foreach ( $list as $entry ) {
+		if ( $entry['url'] === $url ) {
+			return; // Already watching.
+		}
+	}
+	array_unshift( $list, [
+		'url'          => esc_url_raw( $url ),
+		'submitted_at' => time(),
+		'status'       => 'pending',
+		'last_checked' => 0,
+		'coverage'     => '',
+	] );
+	// Cap at 500 entries — oldest drop off the bottom.
+	update_option( 'dc_gi_watchlist', array_slice( $list, 0, 500 ), false );
+}
+
+/**
+ * Remove a single URL from the watchlist.
+ */
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_watchlist_remove( string $url ): void {
+	$list = get_option( 'dc_gi_watchlist', [] );
+	$list = array_values( array_filter( $list, fn( $e ) => $e['url'] !== $url ) );
+	update_option( 'dc_gi_watchlist', $list, false );
+}
+
+/**
+ * Return all URLs currently in the watchlist.
+ */
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_watchlist_get(): array {
+	return (array) get_option( 'dc_gi_watchlist', [] );
+}
+
+/**
+ * Background cron: inspect pending watchlist URLs and mark indexed ones.
+ * Checks up to 20 pending URLs per run to stay well within quota.
+ */
+add_action( DC_GI_WATCH_HOOK, 'dc_gi_run_watchlist_check' );
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_run_watchlist_check(): void {
+	$settings = dc_gi_get_settings();
+	if ( empty( $settings['service_account_json'] ) ) {
+		return;
+	}
+	$sa       = json_decode( $settings['service_account_json'], true );
+	if ( ! $sa || empty( $sa['client_email'] ) || empty( $sa['private_key'] ) ) {
+		return;
+	}
+
+	$site_url = trailingslashit( get_home_url() );
+	$list     = get_option( 'dc_gi_watchlist', [] );
+	$updated  = false;
+	$checked  = 0;
+
+	foreach ( $list as &$entry ) {
+		if ( 'indexed' === $entry['status'] ) {
+			continue; // Already done.
+		}
+		if ( $checked >= 20 ) {
+			break; // Quota-safe batch limit per run.
+		}
+
+		$result = DC_GI_JWT::inspect_url( $sa, $entry['url'], $site_url );
+		$entry['last_checked'] = time();
+		$checked++;
+		$updated = true;
+
+		if ( is_wp_error( $result ) ) {
+			$entry['coverage'] = 'error: ' . $result->get_error_message();
+			continue;
+		}
+
+		$coverage = $result['inspectionResult']['indexStatusResult']['coverageState'] ?? '';
+		$entry['coverage'] = $coverage;
+
+		if ( 'Submitted and indexed' === $coverage
+			|| 'Indexed, not submitted in sitemap' === $coverage ) {
+			$entry['status'] = 'indexed';
+		}
+	}
+	unset( $entry );
+
+	if ( $updated ) {
+		update_option( 'dc_gi_watchlist', $list, false );
+	}
 }
 
 // =============================================================================
@@ -251,10 +362,14 @@ function dc_gi_activate(): void {
 	if ( ! wp_next_scheduled( DC_GI_CRON_HOOK ) ) {
 		wp_schedule_event( time(), 'dc_gi_every5', DC_GI_CRON_HOOK );
 	}
+	if ( ! wp_next_scheduled( DC_GI_WATCH_HOOK ) ) {
+		wp_schedule_event( time() + 300, 'dc_gi_sixhourly', DC_GI_WATCH_HOOK );
+	}
 }
 
 register_deactivation_hook( DC_GI_FILE, 'dc_gi_deactivate' );
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
 function dc_gi_deactivate(): void {
 	wp_clear_scheduled_hook( DC_GI_CRON_HOOK );
+	wp_clear_scheduled_hook( DC_GI_WATCH_HOOK );
 }

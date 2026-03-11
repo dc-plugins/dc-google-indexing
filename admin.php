@@ -45,13 +45,16 @@ function dc_gi_admin_footer_text( string $text ): string {
 // FORM HANDLERS
 // =============================================================================
 
-add_action( 'admin_post_dc_gi_save',      'dc_gi_handle_save' );
-add_action( 'admin_post_dc_gi_test',      'dc_gi_handle_test' );
-add_action( 'admin_post_dc_gi_submit',    'dc_gi_handle_submit' );
-add_action( 'admin_post_dc_gi_runnow',    'dc_gi_handle_runnow' );
-add_action( 'admin_post_dc_gi_clrqueue',  'dc_gi_handle_clear_queue' );
-add_action( 'admin_post_dc_gi_clrlog',    'dc_gi_handle_clear_log' );
-add_action( 'admin_post_dc_gi_poll',      'dc_gi_handle_poll' );
+add_action( 'admin_post_dc_gi_save',       'dc_gi_handle_save' );
+add_action( 'admin_post_dc_gi_test',       'dc_gi_handle_test' );
+add_action( 'admin_post_dc_gi_submit',     'dc_gi_handle_submit' );
+add_action( 'admin_post_dc_gi_runnow',     'dc_gi_handle_runnow' );
+add_action( 'admin_post_dc_gi_clrqueue',   'dc_gi_handle_clear_queue' );
+add_action( 'admin_post_dc_gi_clrlog',     'dc_gi_handle_clear_log' );
+add_action( 'admin_post_dc_gi_poll',       'dc_gi_handle_poll' );
+add_action( 'admin_post_dc_gi_watch_del',  'dc_gi_handle_watch_delete' );
+add_action( 'admin_post_dc_gi_watch_clr',  'dc_gi_handle_watch_clear' );
+add_action( 'admin_post_dc_gi_watch_now',  'dc_gi_handle_watch_check_now' );
 
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
 function dc_gi_handle_save(): void {
@@ -198,6 +201,51 @@ function dc_gi_handle_clear_log(): void {
 }
 
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_handle_watch_delete(): void {
+	check_admin_referer( 'dc_gi_watch_del' );
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_die( esc_html__( 'Forbidden', 'dc-google-indexing' ) );
+	}
+	$url = esc_url_raw( isset( $_POST['watch_url'] ) ? wp_unslash( $_POST['watch_url'] ) : '' );
+	if ( $url ) {
+		dc_gi_watchlist_remove( $url );
+	}
+	wp_safe_redirect( add_query_arg(
+		[ 'page' => 'dc-google-indexing', 'tab' => 'watchlist' ],
+		admin_url( 'admin.php' )
+	) );
+	exit;
+}
+
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_handle_watch_clear(): void {
+	check_admin_referer( 'dc_gi_watch_clr' );
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_die( esc_html__( 'Forbidden', 'dc-google-indexing' ) );
+	}
+	update_option( 'dc_gi_watchlist', [] );
+	wp_safe_redirect( add_query_arg(
+		[ 'page' => 'dc-google-indexing', 'tab' => 'watchlist', 'notice' => 'watch_cleared' ],
+		admin_url( 'admin.php' )
+	) );
+	exit;
+}
+
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_handle_watch_check_now(): void {
+	check_admin_referer( 'dc_gi_watch_now' );
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_die( esc_html__( 'Forbidden', 'dc-google-indexing' ) );
+	}
+	dc_gi_run_watchlist_check();
+	wp_safe_redirect( add_query_arg(
+		[ 'page' => 'dc-google-indexing', 'tab' => 'watchlist', 'notice' => 'watch_checked' ],
+		admin_url( 'admin.php' )
+	) );
+	exit;
+}
+
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
 function dc_gi_handle_poll(): void {
 	check_admin_referer( 'dc_gi_poll' );
 	if ( ! current_user_can( 'manage_options' ) ) {
@@ -232,6 +280,10 @@ function dc_gi_handle_poll(): void {
 		) );
 		exit;
 	}
+
+	// Exclude URLs already tracked in the watchlist — no need to re-inspect them.
+	$watched_urls = array_column( dc_gi_watchlist_get(), 'url' );
+	$all_urls     = array_values( array_diff( $all_urls, $watched_urls ) );
 
 	/**
 	 * Coverage states that Google knows the URL but hasn't indexed it yet.
@@ -302,6 +354,7 @@ function dc_gi_render_page(): void {
 	$settings    = dc_gi_get_settings();
 	$queue       = get_option( 'dc_gi_queue', [] );
 	$log         = get_option( 'dc_gi_log', [] );
+	$watchlist   = dc_gi_watchlist_get();
 	$quota_used  = dc_gi_get_quota_used();
 	$quota_limit = min( 200, (int) ( $settings['daily_quota'] ?? 200 ) );
 	$has_sa      = ! empty( $settings['service_account_json'] );
@@ -348,6 +401,8 @@ function dc_gi_render_page(): void {
 		) ],
 		'poll_no_sitemap' => [ 'error',   esc_html( $errmsg ) ?: __( 'No sitemap found. Ensure your site has a public XML sitemap.', 'dc-google-indexing' ) ],
 		'poll_error'      => [ 'error',   esc_html( $errmsg ) ?: __( 'Polling failed.', 'dc-google-indexing' ) ],
+		'watch_cleared'   => [ 'success', __( 'Watchlist cleared.', 'dc-google-indexing' ) ],
+		'watch_checked'   => [ 'success', __( 'Watchlist check complete.', 'dc-google-indexing' ) ],
 	];
 
 	$all_post_types = get_post_types( [ 'public' => true ], 'objects' );
@@ -388,12 +443,13 @@ function dc_gi_render_page(): void {
 		<nav class="nav-tab-wrapper" style="margin-bottom:0">
 			<?php
 			$tabs = [
-				'start'    => __( '🚀 Getting Started', 'dc-google-indexing' ),
-				'settings' => __( 'Settings', 'dc-google-indexing' ),
-				'submit'   => __( 'Submit URLs', 'dc-google-indexing' ),
-				'queue'    => __( 'Queue', 'dc-google-indexing' ),
-				'polling'  => __( '📡 Polling', 'dc-google-indexing' ),
-				'log'      => __( 'Log', 'dc-google-indexing' ),
+				'start'     => __( '🚀 Getting Started', 'dc-google-indexing' ),
+				'settings'  => __( 'Settings', 'dc-google-indexing' ),
+				'submit'    => __( 'Submit URLs', 'dc-google-indexing' ),
+				'queue'     => __( 'Queue', 'dc-google-indexing' ),
+				'watchlist' => __( '👁 Watchlist', 'dc-google-indexing' ),
+				'polling'   => __( '📡 Polling', 'dc-google-indexing' ),
+				'log'       => __( 'Log', 'dc-google-indexing' ),
 			];
 			foreach ( $tabs as $t => $label ) {
 				printf(
@@ -1085,6 +1141,113 @@ function dc_gi_render_page(): void {
 					<td><?php echo esc_html( $item['url'] ); ?></td>
 					<td><code><?php echo esc_html( $item['type'] ); ?></code></td>
 					<td><?php echo esc_html( wp_date( 'Y-m-d H:i:s', $item['added'] ) ); ?></td>
+				</tr>
+				<?php endforeach; ?>
+			</tbody>
+		</table>
+		<?php endif; ?>
+
+		<?php elseif ( 'watchlist' === $tab ) : ?>
+
+		<!-- ===== WATCHLIST ===== -->
+		<style>
+		.dc-gi-wl-badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; }
+		.dc-gi-wl-badge.pending  { background:#fff3cd; color:#856404; }
+		.dc-gi-wl-badge.indexed  { background:#d1e7dd; color:#0f5132; }
+		.dc-gi-wl-badge.error    { background:#f8d7da; color:#842029; }
+		.dc-gi-wl-next { color:#777; font-size:12px; }
+		</style>
+
+		<h2 style="margin-top:0"><?php esc_html_e( 'Watchlist — Index Status Tracker', 'dc-google-indexing' ); ?></h2>
+		<p style="color:#555;max-width:700px">
+			<?php esc_html_e( 'Every URL successfully submitted to Google is tracked here. Status is checked automatically every 6 hours via WP-Cron and updated when Google reports the page as indexed. URLs already in the Watchlist are skipped during Polling to avoid wasting inspection quota.', 'dc-google-indexing' ); ?>
+		</p>
+
+		<?php
+		$watch_pending = array_filter( $watchlist, fn( $e ) => 'pending' === $e['status'] );
+		$watch_indexed = array_filter( $watchlist, fn( $e ) => 'indexed' === $e['status'] );
+		$next_watch    = wp_next_scheduled( DC_GI_WATCH_HOOK );
+		?>
+
+		<div style="display:flex;gap:12px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
+			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+				<?php wp_nonce_field( 'dc_gi_watch_now' ); ?>
+				<input type="hidden" name="action" value="dc_gi_watch_now">
+				<button type="submit" class="button button-primary"><?php esc_html_e( '🔄 Check Now', 'dc-google-indexing' ); ?></button>
+			</form>
+			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"
+				onsubmit="return confirm('<?php esc_attr_e( 'Clear the entire watchlist?', 'dc-google-indexing' ); ?>')">
+				<?php wp_nonce_field( 'dc_gi_watch_clr' ); ?>
+				<input type="hidden" name="action" value="dc_gi_watch_clr">
+				<button type="submit" class="button"><?php esc_html_e( 'Clear All', 'dc-google-indexing' ); ?></button>
+			</form>
+			<span class="dc-gi-wl-next">
+				<?php if ( $next_watch ) : ?>
+					<?php printf(
+						/* translators: %s: human-readable time until next auto-check */
+						esc_html__( 'Next auto-check in %s', 'dc-google-indexing' ),
+						esc_html( human_time_diff( time(), $next_watch ) )
+					); ?>
+				<?php else : ?>
+					<?php esc_html_e( 'Auto-check not scheduled — re-save settings to reload cron.', 'dc-google-indexing' ); ?>
+				<?php endif; ?>
+			</span>
+		</div>
+
+		<div style="display:flex;gap:20px;margin-bottom:20px">
+			<div class="dc-gi-stat" style="min-width:120px">
+				<div class="dc-gi-stat-num"><?php echo esc_html( (string) count( $watchlist ) ); ?></div>
+				<div class="dc-gi-stat-label"><?php esc_html_e( 'Total', 'dc-google-indexing' ); ?></div>
+			</div>
+			<div class="dc-gi-stat" style="min-width:120px">
+				<div class="dc-gi-stat-num" style="color:#856404"><?php echo esc_html( (string) count( $watch_pending ) ); ?></div>
+				<div class="dc-gi-stat-label"><?php esc_html_e( 'Pending', 'dc-google-indexing' ); ?></div>
+			</div>
+			<div class="dc-gi-stat green" style="min-width:120px">
+				<div class="dc-gi-stat-num"><?php echo esc_html( (string) count( $watch_indexed ) ); ?></div>
+				<div class="dc-gi-stat-label"><?php esc_html_e( 'Indexed', 'dc-google-indexing' ); ?></div>
+			</div>
+		</div>
+
+		<?php if ( empty( $watchlist ) ) : ?>
+		<p style="color:#777"><?php esc_html_e( 'No URLs tracked yet. Submit URLs to Google and they will appear here automatically.', 'dc-google-indexing' ); ?></p>
+		<?php else : ?>
+		<table class="widefat striped" style="margin-top:0">
+			<thead>
+				<tr>
+					<th><?php esc_html_e( 'URL', 'dc-google-indexing' ); ?></th>
+					<th style="width:100px"><?php esc_html_e( 'Status', 'dc-google-indexing' ); ?></th>
+					<th style="width:200px"><?php esc_html_e( 'Coverage State', 'dc-google-indexing' ); ?></th>
+					<th style="width:140px"><?php esc_html_e( 'Submitted', 'dc-google-indexing' ); ?></th>
+					<th style="width:140px"><?php esc_html_e( 'Last Checked', 'dc-google-indexing' ); ?></th>
+					<th style="width:50px"></th>
+				</tr>
+			</thead>
+			<tbody>
+				<?php foreach ( $watchlist as $entry ) :
+					$badge_class = in_array( $entry['status'], [ 'pending', 'indexed', 'error' ], true )
+						? $entry['status'] : 'pending';
+				?>
+				<tr>
+					<td>
+						<a href="<?php echo esc_url( $entry['url'] ); ?>" target="_blank" rel="noopener noreferrer">
+							<?php echo esc_html( $entry['url'] ); ?>
+						</a>
+					</td>
+					<td><span class="dc-gi-wl-badge <?php echo esc_attr( $badge_class ); ?>"><?php echo esc_html( ucfirst( $entry['status'] ) ); ?></span></td>
+					<td><?php echo esc_html( $entry['coverage'] ?: '—' ); ?></td>
+					<td><?php echo esc_html( wp_date( 'Y-m-d H:i', $entry['submitted_at'] ) ); ?></td>
+					<td><?php echo $entry['last_checked'] ? esc_html( wp_date( 'Y-m-d H:i', $entry['last_checked'] ) ) : '—'; ?></td>
+					<td>
+						<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+							<?php wp_nonce_field( 'dc_gi_watch_del' ); ?>
+							<input type="hidden" name="action" value="dc_gi_watch_del">
+							<input type="hidden" name="watch_url" value="<?php echo esc_attr( $entry['url'] ); ?>">
+							<button type="submit" class="button button-link-delete" style="font-size:11px"
+								onclick="return confirm('<?php esc_attr_e( 'Remove from watchlist?', 'dc-google-indexing' ); ?>')"
+							>&times;</button>
+						</form>
+					</td>
 				</tr>
 				<?php endforeach; ?>
 			</tbody>
