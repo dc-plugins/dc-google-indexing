@@ -25,10 +25,11 @@ class DC_GI_JWT {
 	/**
 	 * Build and sign an RS256 JWT for Google OAuth2.
 	 *
-	 * @param  array           $sa  Decoded service account JSON.
-	 * @return string|WP_Error      Signed JWT or WP_Error.
+	 * @param  array           $sa     Decoded service account JSON.
+	 * @param  string          $scope  OAuth2 scope (space-separated for multiple).
+	 * @return string|WP_Error         Signed JWT or WP_Error.
 	 */
-	private static function build_jwt( array $sa ) {
+	private static function build_jwt( array $sa, string $scope = 'https://www.googleapis.com/auth/indexing' ) {
 		$now = time();
 
 		$header  = self::base64url_encode(
@@ -37,7 +38,7 @@ class DC_GI_JWT {
 		$payload = self::base64url_encode(
 			(string) wp_json_encode( [
 				'iss'   => $sa['client_email'],
-				'scope' => 'https://www.googleapis.com/auth/indexing',
+				'scope' => $scope,
 				'aud'   => 'https://oauth2.googleapis.com/token',
 				'iat'   => $now,
 				'exp'   => $now + 3600,
@@ -65,18 +66,20 @@ class DC_GI_JWT {
 	// -------------------------------------------------------------------------
 
 	/**
-	 * Obtain (or return cached) Google access token.
+	 * Exchange a signed JWT for a Google OAuth2 access token and cache it.
 	 *
-	 * @param  array           $sa  Decoded service account JSON.
-	 * @return string|WP_Error      Bearer token or WP_Error.
+	 * @param  array           $sa            Decoded service account JSON.
+	 * @param  string          $scope         OAuth2 scope string.
+	 * @param  string          $transient_key WP transient key for caching.
+	 * @return string|WP_Error                Bearer token or WP_Error.
 	 */
-	public static function get_access_token( array $sa ) {
-		$cached = get_transient( 'dc_gi_access_token' );
+	private static function get_token_for_scope( array $sa, string $scope, string $transient_key ) {
+		$cached = get_transient( $transient_key );
 		if ( $cached ) {
 			return $cached;
 		}
 
-		$jwt = self::build_jwt( $sa );
+		$jwt = self::build_jwt( $sa, $scope );
 		if ( is_wp_error( $jwt ) ) {
 			return $jwt;
 		}
@@ -106,9 +109,37 @@ class DC_GI_JWT {
 		}
 
 		$ttl = isset( $body['expires_in'] ) ? (int) $body['expires_in'] - 60 : 3540;
-		set_transient( 'dc_gi_access_token', $body['access_token'], $ttl );
+		set_transient( $transient_key, $body['access_token'], $ttl );
 
 		return $body['access_token'];
+	}
+
+	/**
+	 * Obtain (or return cached) access token for the Indexing API.
+	 *
+	 * @param  array           $sa  Decoded service account JSON.
+	 * @return string|WP_Error      Bearer token or WP_Error.
+	 */
+	public static function get_access_token( array $sa ) {
+		return self::get_token_for_scope(
+			$sa,
+			'https://www.googleapis.com/auth/indexing',
+			'dc_gi_access_token'
+		);
+	}
+
+	/**
+	 * Obtain (or return cached) access token for the URL Inspection API.
+	 *
+	 * @param  array           $sa  Decoded service account JSON.
+	 * @return string|WP_Error      Bearer token or WP_Error.
+	 */
+	public static function get_inspection_token( array $sa ) {
+		return self::get_token_for_scope(
+			$sa,
+			'https://www.googleapis.com/auth/webmasters.readonly',
+			'dc_gi_inspection_token'
+		);
 	}
 
 	// -------------------------------------------------------------------------
@@ -162,6 +193,58 @@ class DC_GI_JWT {
 				delete_transient( 'dc_gi_access_token' );
 			}
 			return new WP_Error( 'dc_gi_api_error', $msg, [ 'status' => $code ] );
+		}
+
+		return (array) $body;
+	}
+
+	/**
+	 * Inspect a URL via the Google Search Console URL Inspection API.
+	 *
+	 * @param  array           $sa        Decoded service account JSON.
+	 * @param  string          $url       Fully qualified URL to inspect.
+	 * @param  string          $site_url  Search Console property URL (e.g. https://example.com/).
+	 * @return array|WP_Error             API response body or WP_Error.
+	 */
+	public static function inspect_url( array $sa, string $url, string $site_url ) {
+		$token = self::get_inspection_token( $sa );
+		if ( is_wp_error( $token ) ) {
+			return $token;
+		}
+
+		$response = wp_remote_post(
+			'https://searchconsole.googleapis.com/v1/urlInspection/index:inspect',
+			[
+				'headers' => [
+					'Authorization' => 'Bearer ' . $token,
+					'Content-Type'  => 'application/json',
+				],
+				'body'    => (string) wp_json_encode( [
+					'inspectionUrl' => $url,
+					'siteUrl'       => $site_url,
+				] ),
+				'timeout' => 15,
+			]
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+
+		$code = (int) wp_remote_retrieve_response_code( $response );
+		$body = json_decode( wp_remote_retrieve_body( $response ), true );
+
+		if ( 200 !== $code ) {
+			$msg = $body['error']['message']
+				?? sprintf(
+					/* translators: %d: HTTP response code from Google API */
+					__( 'URL Inspection API returned HTTP %d.', 'dc-google-indexing' ),
+					$code
+				);
+			if ( 401 === $code ) {
+				delete_transient( 'dc_gi_inspection_token' );
+			}
+			return new WP_Error( 'dc_gi_inspect_error', $msg, [ 'status' => $code ] );
 		}
 
 		return (array) $body;

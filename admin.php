@@ -51,6 +51,7 @@ add_action( 'admin_post_dc_gi_submit',    'dc_gi_handle_submit' );
 add_action( 'admin_post_dc_gi_runnow',    'dc_gi_handle_runnow' );
 add_action( 'admin_post_dc_gi_clrqueue',  'dc_gi_handle_clear_queue' );
 add_action( 'admin_post_dc_gi_clrlog',    'dc_gi_handle_clear_log' );
+add_action( 'admin_post_dc_gi_poll',      'dc_gi_handle_poll' );
 
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
 function dc_gi_handle_save(): void {
@@ -196,6 +197,98 @@ function dc_gi_handle_clear_log(): void {
 	exit;
 }
 
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_handle_poll(): void {
+	check_admin_referer( 'dc_gi_poll' );
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_die( esc_html__( 'Forbidden', 'dc-google-indexing' ) );
+	}
+
+	$settings = dc_gi_get_settings();
+	if ( empty( $settings['service_account_json'] ) ) {
+		wp_safe_redirect( add_query_arg(
+			[ 'page' => 'dc-google-indexing', 'tab' => 'polling', 'notice' => 'test_no_sa' ],
+			admin_url( 'admin.php' )
+		) );
+		exit;
+	}
+
+	$sa         = json_decode( $settings['service_account_json'], true );
+	$site_url   = trailingslashit( get_home_url() );
+	// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+	$poll_limit = min( 200, max( 1, absint( isset( $_POST['poll_limit'] ) ? wp_unslash( $_POST['poll_limit'] ) : 50 ) ) );
+
+	// Fetch more URLs than we'll inspect so we have enough candidates after filtering.
+	$all_urls = DC_GI_Sitemap::get_urls( $poll_limit * 4 );
+	if ( is_wp_error( $all_urls ) ) {
+		wp_safe_redirect( add_query_arg(
+			[
+				'page'   => 'dc-google-indexing',
+				'tab'    => 'polling',
+				'notice' => 'poll_no_sitemap',
+				'errmsg' => rawurlencode( $all_urls->get_error_message() ),
+			],
+			admin_url( 'admin.php' )
+		) );
+		exit;
+	}
+
+	/**
+	 * Coverage states that Google knows the URL but hasn't indexed it yet.
+	 * These are the only states worth re-submitting.
+	 * All error/exclusion states (404, redirect, noindex, robots, canonical, 5xx, etc.) are skipped.
+	 */
+	$submittable = [
+		'Crawled - currently not indexed',
+		'Discovered - currently not indexed',
+	];
+
+	$inspected = 0;
+	$queued    = 0;
+	$skipped   = 0;
+	$errors    = 0;
+
+	foreach ( array_slice( $all_urls, 0, $poll_limit ) as $url ) {
+		$result = DC_GI_JWT::inspect_url( $sa, $url, $site_url );
+		$inspected++;
+
+		if ( is_wp_error( $result ) ) {
+			$errors++;
+			dc_gi_add_log( $url, 'INSPECT', $result );
+			continue;
+		}
+
+		$coverage_state = $result['inspectionResult']['indexStatusResult']['coverageState'] ?? '';
+
+		if ( in_array( $coverage_state, $submittable, true ) ) {
+			dc_gi_enqueue_url( $url, 'URL_UPDATED' );
+			$queued++;
+		} else {
+			$skipped++;
+		}
+	}
+
+	set_transient( 'dc_gi_last_poll', [
+		'time'      => time(),
+		'inspected' => $inspected,
+		'queued'    => $queued,
+		'skipped'   => $skipped,
+		'errors'    => $errors,
+	], DAY_IN_SECONDS );
+
+	wp_safe_redirect( add_query_arg(
+		[
+			'page'      => 'dc-google-indexing',
+			'tab'       => 'polling',
+			'notice'    => 'poll_done',
+			'inspected' => $inspected,
+			'pqueued'   => $queued,
+		],
+		admin_url( 'admin.php' )
+	) );
+	exit;
+}
+
 // =============================================================================
 // RENDER PAGE
 // =============================================================================
@@ -225,22 +318,36 @@ function dc_gi_render_page(): void {
 	// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 	$errmsg = isset( $_GET['errmsg'] ) ? rawurldecode( sanitize_text_field( wp_unslash( $_GET['errmsg'] ) ) ) : '';
 	// phpcs:ignore WordPress.Security.NonceVerification.Recommended
-	$queued_count = absint( isset( $_GET['count'] ) ? wp_unslash( $_GET['count'] ) : 0 );
+	$queued_count      = absint( isset( $_GET['count'] ) ? wp_unslash( $_GET['count'] ) : 0 );
+	// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+	$poll_inspected    = absint( isset( $_GET['inspected'] ) ? wp_unslash( $_GET['inspected'] ) : 0 );
+	// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+	$poll_queued       = absint( isset( $_GET['pqueued'] ) ? wp_unslash( $_GET['pqueued'] ) : 0 );
+
+	$last_poll = get_transient( 'dc_gi_last_poll' );
 
 	$notices = [
-		'saved'         => [ 'success', __( 'Settings saved.', 'dc-google-indexing' ) ],
-		'invalid_json'  => [ 'error',   __( 'Invalid JSON — ensure it contains client_email and private_key.', 'dc-google-indexing' ) ],
-		'queued'        => [ 'success', sprintf(
+		'saved'           => [ 'success', __( 'Settings saved.', 'dc-google-indexing' ) ],
+		'invalid_json'    => [ 'error',   __( 'Invalid JSON — ensure it contains client_email and private_key.', 'dc-google-indexing' ) ],
+		'queued'          => [ 'success', sprintf(
 			/* translators: %d: number of URLs added to queue */
 			__( '%d URL(s) added to queue.', 'dc-google-indexing' ),
 			$queued_count
 		) ],
-		'processed'     => [ 'success', __( 'Queue processed.', 'dc-google-indexing' ) ],
-		'queue_cleared' => [ 'success', __( 'Queue cleared.', 'dc-google-indexing' ) ],
-		'log_cleared'   => [ 'success', __( 'Log cleared.', 'dc-google-indexing' ) ],
-		'test_ok'       => [ 'success', __( '&#10003; Connection successful — credentials are valid.', 'dc-google-indexing' ) ],
-		'test_fail'     => [ 'error',   esc_html( $errmsg ) ?: __( 'Connection failed.', 'dc-google-indexing' ) ],
-		'test_no_sa'    => [ 'error',   __( 'No service account saved. Paste your JSON and save first.', 'dc-google-indexing' ) ],
+		'processed'       => [ 'success', __( 'Queue processed.', 'dc-google-indexing' ) ],
+		'queue_cleared'   => [ 'success', __( 'Queue cleared.', 'dc-google-indexing' ) ],
+		'log_cleared'     => [ 'success', __( 'Log cleared.', 'dc-google-indexing' ) ],
+		'test_ok'         => [ 'success', __( '&#10003; Connection successful — credentials are valid.', 'dc-google-indexing' ) ],
+		'test_fail'       => [ 'error',   esc_html( $errmsg ) ?: __( 'Connection failed.', 'dc-google-indexing' ) ],
+		'test_no_sa'      => [ 'error',   __( 'No service account saved. Paste your JSON and save first.', 'dc-google-indexing' ) ],
+		'poll_done'       => [ 'success', sprintf(
+			/* translators: 1: number of URLs inspected 2: number queued */
+			__( 'Polling complete: %1$d URL(s) inspected, %2$d added to queue.', 'dc-google-indexing' ),
+			$poll_inspected,
+			$poll_queued
+		) ],
+		'poll_no_sitemap' => [ 'error',   esc_html( $errmsg ) ?: __( 'No sitemap found. Ensure your site has a public XML sitemap.', 'dc-google-indexing' ) ],
+		'poll_error'      => [ 'error',   esc_html( $errmsg ) ?: __( 'Polling failed.', 'dc-google-indexing' ) ],
 	];
 
 	$all_post_types = get_post_types( [ 'public' => true ], 'objects' );
@@ -281,9 +388,11 @@ function dc_gi_render_page(): void {
 		<nav class="nav-tab-wrapper" style="margin-bottom:0">
 			<?php
 			$tabs = [
+				'start'    => __( '🚀 Getting Started', 'dc-google-indexing' ),
 				'settings' => __( 'Settings', 'dc-google-indexing' ),
 				'submit'   => __( 'Submit URLs', 'dc-google-indexing' ),
 				'queue'    => __( 'Queue', 'dc-google-indexing' ),
+				'polling'  => __( '📡 Polling', 'dc-google-indexing' ),
 				'log'      => __( 'Log', 'dc-google-indexing' ),
 			];
 			foreach ( $tabs as $t => $label ) {
@@ -981,6 +1090,143 @@ function dc_gi_render_page(): void {
 			</tbody>
 		</table>
 		<?php endif; ?>
+
+		<?php elseif ( 'polling' === $tab ) : ?>
+
+		<!-- ===== POLLING ===== -->
+		<style>
+		.dc-gi-grid-3 { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin:16px 0; }
+		.dc-gi-stat { background:#f6f7f7; border:1px solid #e0e0e0; border-radius:6px; padding:14px 18px; text-align:center; }
+		.dc-gi-stat-num { font-size:28px; font-weight:700; color:#1d2327; line-height:1.2; }
+		.dc-gi-stat-label { font-size:12px; color:#777; margin-top:4px; }
+		.dc-gi-stat.green .dc-gi-stat-num { color:#46b450; }
+		.dc-gi-stat.red .dc-gi-stat-num { color:#dc3232; }
+		.dc-gi-filter-list { list-style:none; margin:0; padding:0; columns:2; }
+		.dc-gi-filter-list li { padding:4px 0 4px 20px; position:relative; font-size:13px; color:#555; }
+		.dc-gi-filter-list li::before { content:'❌'; position:absolute; left:0; font-size:11px; top:5px; }
+		.dc-gi-filter-list li.ok::before { content:'✅'; }
+		</style>
+
+		<h2 style="margin-top:0"><?php esc_html_e( 'URL Polling — Discover Unindexed Pages', 'dc-google-indexing' ); ?></h2>
+
+		<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;max-width:900px">
+			<div class="dc-gi-callout info" style="margin:0">
+				<strong><?php esc_html_e( 'How it works', 'dc-google-indexing' ); ?></strong><br>
+				<?php esc_html_e( 'Polling fetches your XML sitemap, then calls the Google URL Inspection API for each URL to check its current index status. URLs that are known to Google but not yet indexed are automatically added to the submission queue.', 'dc-google-indexing' ); ?>
+			</div>
+			<div class="dc-gi-callout warn" style="margin:0">
+				<strong><?php esc_html_e( '⚠️ Use sparingly', 'dc-google-indexing' ); ?></strong><br>
+				<?php esc_html_e( 'Each URL consumes 1 inspection (quota: 2,000/day). Qualifying URLs are then submitted against the Indexing API quota (200/day). Large sitemaps can exhaust both limits quickly.', 'dc-google-indexing' ); ?>
+			</div>
+		</div>
+
+		<?php if ( $last_poll ) : ?>
+		<h3><?php esc_html_e( 'Last Polling Run', 'dc-google-indexing' ); ?></h3>
+		<p style="color:#777;font-size:13px;margin-top:-8px">
+			<?php echo esc_html( wp_date( 'Y-m-d H:i:s', $last_poll['time'] ) ); ?>
+		</p>
+		<div class="dc-gi-grid-3" style="max-width:600px">
+			<div class="dc-gi-stat">
+				<div class="dc-gi-stat-num"><?php echo esc_html( (string) $last_poll['inspected'] ); ?></div>
+				<div class="dc-gi-stat-label"><?php esc_html_e( 'Inspected', 'dc-google-indexing' ); ?></div>
+			</div>
+			<div class="dc-gi-stat green">
+				<div class="dc-gi-stat-num"><?php echo esc_html( (string) $last_poll['queued'] ); ?></div>
+				<div class="dc-gi-stat-label"><?php esc_html_e( 'Added to queue', 'dc-google-indexing' ); ?></div>
+			</div>
+			<div class="dc-gi-stat">
+				<div class="dc-gi-stat-num"><?php echo esc_html( (string) $last_poll['skipped'] ); ?></div>
+				<div class="dc-gi-stat-label"><?php esc_html_e( 'Filtered out', 'dc-google-indexing' ); ?></div>
+			</div>
+		</div>
+		<?php if ( $last_poll['errors'] > 0 ) : ?>
+		<p style="color:#dc3232;font-size:13px">
+			<?php printf(
+				/* translators: %d: number of errors */
+				esc_html__( '%d inspection error(s) — see Log tab for details.', 'dc-google-indexing' ),
+				(int) $last_poll['errors']
+			); ?>
+		</p>
+		<?php endif; ?>
+		<?php endif; ?>
+
+		<hr style="margin:24px 0 20px">
+
+		<h3 style="margin-bottom:4px"><?php esc_html_e( 'Run Polling', 'dc-google-indexing' ); ?></h3>
+		<p style="color:#555;font-size:13px;margin-top:0">
+			<?php echo wp_kses_post( sprintf(
+				/* translators: %s: URL to site home */
+				__( 'Site URL detected: <code>%s</code>. This must match your Search Console property.', 'dc-google-indexing' ),
+				esc_html( trailingslashit( get_home_url() ) )
+			) ); ?>
+		</p>
+
+		<?php if ( ! $has_sa ) : ?>
+		<div class="dc-gi-callout err">
+			<?php echo wp_kses_post( sprintf(
+				/* translators: %s: link to settings tab */
+				__( 'No service account configured. <a href="%s">Go to Settings</a> to connect your Google Cloud credentials first.', 'dc-google-indexing' ),
+				esc_url( add_query_arg( [ 'page' => 'dc-google-indexing', 'tab' => 'settings' ], admin_url( 'admin.php' ) ) )
+			) ); ?>
+		</div>
+		<?php else : ?>
+
+		<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="max-width:500px">
+			<?php wp_nonce_field( 'dc_gi_poll' ); ?>
+			<input type="hidden" name="action" value="dc_gi_poll">
+			<table class="form-table" role="presentation" style="margin-top:0">
+				<tr>
+					<th scope="row" style="width:180px">
+						<label for="poll_limit"><?php esc_html_e( 'URLs to inspect', 'dc-google-indexing' ); ?></label>
+					</th>
+					<td>
+						<input type="number" id="poll_limit" name="poll_limit" value="50" min="1" max="200" class="small-text">
+						<p class="description">
+							<?php esc_html_e( 'Max 200. Each URL costs 1 inspection from your 2,000/day quota. Start small (10–50) to see how many unindexed pages you have before running larger batches.', 'dc-google-indexing' ); ?>
+						</p>
+					</td>
+				</tr>
+			</table>
+			<p>
+				<button type="submit" class="button button-primary">
+					<?php esc_html_e( '🔍 Start Polling', 'dc-google-indexing' ); ?>
+				</button>
+				<span class="description" style="margin-left:10px">
+					<?php esc_html_e( 'This may take 30–60 seconds for large batches.', 'dc-google-indexing' ); ?>
+				</span>
+			</p>
+		</form>
+
+		<?php endif; ?>
+
+		<hr style="margin:24px 0 20px">
+
+		<h3 style="margin-bottom:8px"><?php esc_html_e( 'Filter Logic — What Gets Submitted vs. Skipped', 'dc-google-indexing' ); ?></h3>
+		<p style="color:#555;font-size:13px;margin-top:0"><?php esc_html_e( 'Only URLs with these Google coverage states are queued for submission:', 'dc-google-indexing' ); ?></p>
+		<ul class="dc-gi-filter-list">
+			<li class="ok"><?php esc_html_e( 'Crawled — currently not indexed', 'dc-google-indexing' ); ?></li>
+			<li class="ok"><?php esc_html_e( 'Discovered — currently not indexed', 'dc-google-indexing' ); ?></li>
+		</ul>
+		<p style="color:#555;font-size:13px;margin-top:16px"><?php esc_html_e( 'These states are automatically filtered out (noise):', 'dc-google-indexing' ); ?></p>
+		<ul class="dc-gi-filter-list">
+			<li><?php esc_html_e( 'Submitted and indexed (already done)', 'dc-google-indexing' ); ?></li>
+			<li><?php esc_html_e( 'Indexed, not submitted in sitemap', 'dc-google-indexing' ); ?></li>
+			<li><?php esc_html_e( 'Not found (404)', 'dc-google-indexing' ); ?></li>
+			<li><?php esc_html_e( 'Page with redirect (301/302)', 'dc-google-indexing' ); ?></li>
+			<li><?php esc_html_e( 'Redirect error', 'dc-google-indexing' ); ?></li>
+			<li><?php esc_html_e( 'Server error (5xx)', 'dc-google-indexing' ); ?></li>
+			<li><?php esc_html_e( 'Soft 404', 'dc-google-indexing' ); ?></li>
+			<li><?php esc_html_e( 'Excluded by \'noindex\' tag', 'dc-google-indexing' ); ?></li>
+			<li><?php esc_html_e( 'Blocked by robots.txt', 'dc-google-indexing' ); ?></li>
+			<li><?php esc_html_e( 'Alternate page with canonical tag', 'dc-google-indexing' ); ?></li>
+			<li><?php esc_html_e( 'Duplicate — Google chose different canonical', 'dc-google-indexing' ); ?></li>
+			<li><?php esc_html_e( 'Blocked (401 unauthorized)', 'dc-google-indexing' ); ?></li>
+		</ul>
+
+		<div class="dc-gi-callout info" style="max-width:700px;margin-top:16px">
+			<strong><?php esc_html_e( 'Tip: Fix root causes, not symptoms', 'dc-google-indexing' ); ?></strong><br>
+			<?php esc_html_e( 'If polling consistently finds many filtered-out URLs (redirects, canonicals, noindex), those pages likely have underlying SEO issues. Submitting them won\'t help — fix the issues first (correct canonicals, remove noindex, fix redirects) then run polling again.', 'dc-google-indexing' ); ?>
+		</div>
 
 		<?php elseif ( 'log' === $tab ) : ?>
 

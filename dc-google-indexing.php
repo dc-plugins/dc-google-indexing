@@ -25,6 +25,7 @@ define( 'DC_GI_CRON_HOOK',   'dc_gi_process_queue' );
 define( 'DC_GI_DAILY_CAP',   200 );
 
 require_once DC_GI_DIR . 'class-jwt.php';
+require_once DC_GI_DIR . 'class-sitemap.php';
 require_once DC_GI_DIR . 'admin.php';
 
 // =============================================================================
