@@ -10,7 +10,7 @@
  * License:     GPL-2.0+
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain: dc-google-indexing
- * Requires at least: 6.0
+ * Requires at least: 6.8
  * Requires PHP:      7.4
  */
 
