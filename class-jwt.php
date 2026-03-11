@@ -194,7 +194,7 @@ class DC_GI_JWT {
 			}
 			if ( 403 === $code && false !== stripos( $msg, 'URL ownership' ) ) {
 				$msg = __(
-					'Permission denied: the service account is not verified as a property owner. Open Search Console → Settings → Users and permissions, add the service account email with Full permission.',
+					'Permission denied: service account lacks Owner permission. In Search Console → Settings → Users and permissions, remove the service account and re-add it with "Owner" permission (not "Full" or "Restricted").',
 					'dc-google-indexing'
 				);
 			}

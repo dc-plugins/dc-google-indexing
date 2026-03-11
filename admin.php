@@ -842,17 +842,17 @@ function dc_gi_render_page(): void {
 				<div class="dc-gi-substep">
 					<div class="dc-gi-substep-num">4</div>
 					<div class="dc-gi-substep-content">
-						<p><?php echo wp_kses_post( __( 'Paste the <code>client_email</code> from your JSON file into the email field and set Permission to <strong>Full</strong>. Click Add.', 'dc-google-indexing' ) ); ?></p>
+						<p><?php echo wp_kses_post( __( 'Paste the <code>client_email</code> from your JSON file into the email field and set Permission to <strong>Owner</strong>. Click Add.', 'dc-google-indexing' ) ); ?></p>
 						<div class="dc-gi-callout warn">
-							<strong><?php esc_html_e( 'Must be "Full" permission.', 'dc-google-indexing' ); ?></strong>
-							<?php esc_html_e( '"Restricted" permission is not enough — the API call will fail with a 403 error if you use restricted access.', 'dc-google-indexing' ); ?>
+							<strong><?php esc_html_e( 'Must be "Owner" — not "Full" or "Restricted".', 'dc-google-indexing' ); ?></strong>
+							<?php esc_html_e( 'The Indexing API requires property ownership, not just user access. "Full" user permission will still result in a 403 Permission denied error.', 'dc-google-indexing' ); ?>
 						</div>
 					</div>
 				</div>
 
 				<div class="dc-gi-callout ok">
 					<strong><?php esc_html_e( '✅ Done when:', 'dc-google-indexing' ); ?></strong>
-					<?php esc_html_e( 'The service account email appears in the Users and permissions list with "Full" next to it.', 'dc-google-indexing' ); ?>
+					<?php esc_html_e( 'The service account email appears in the Users and permissions list with "Owner" next to it.', 'dc-google-indexing' ); ?>
 				</div>
 			</div>
 		</div>
@@ -940,8 +940,8 @@ function dc_gi_render_page(): void {
 				</form>
 
 				<div class="dc-gi-callout warn" style="margin-top:16px">
-					<strong><?php esc_html_e( 'Getting a 403 error after connecting?', 'dc-google-indexing' ); ?></strong>
-					<?php esc_html_e( 'This almost always means Step 4 is incomplete — the service account email was not added to Search Console with Full permission. Go back and double-check the email matches exactly.', 'dc-google-indexing' ); ?>
+					<strong><?php esc_html_e( 'Getting a 403 Permission denied error?', 'dc-google-indexing' ); ?></strong>
+					<?php esc_html_e( 'Go to Search Console → Settings → Users and permissions and check the service account entry. It must show "Owner" — not "Full" or "Restricted". If it shows "Full", remove it and re-add with Owner permission.', 'dc-google-indexing' ); ?>
 				</div>
 
 				<?php endif; ?>
