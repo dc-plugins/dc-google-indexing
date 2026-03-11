@@ -13,6 +13,7 @@ delete_option( 'dc_gi_settings' );
 delete_option( 'dc_gi_queue' );
 delete_option( 'dc_gi_log' );
 delete_option( 'dc_gi_watchlist' );
+delete_option( 'dc_gi_poll_seen' );
 delete_transient( 'dc_gi_access_token' );
 delete_transient( 'dc_gi_inspection_token' );
 delete_transient( 'dc_gi_last_poll' );

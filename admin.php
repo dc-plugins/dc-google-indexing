@@ -52,6 +52,7 @@ add_action( 'admin_post_dc_gi_runnow',     'dc_gi_handle_runnow' );
 add_action( 'admin_post_dc_gi_clrqueue',   'dc_gi_handle_clear_queue' );
 add_action( 'admin_post_dc_gi_clrlog',     'dc_gi_handle_clear_log' );
 add_action( 'admin_post_dc_gi_poll',       'dc_gi_handle_poll' );
+add_action( 'admin_post_dc_gi_poll_reset', 'dc_gi_handle_poll_reset' );
 add_action( 'admin_post_dc_gi_watch_del',  'dc_gi_handle_watch_delete' );
 add_action( 'admin_post_dc_gi_watch_clr',  'dc_gi_handle_watch_clear' );
 add_action( 'admin_post_dc_gi_watch_now',  'dc_gi_handle_watch_check_now' );
@@ -266,8 +267,8 @@ function dc_gi_handle_poll(): void {
 	// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 	$poll_limit = min( 200, max( 1, absint( isset( $_POST['poll_limit'] ) ? wp_unslash( $_POST['poll_limit'] ) : 50 ) ) );
 
-	// Fetch more URLs than we'll inspect so we have enough candidates after filtering.
-	$all_urls = DC_GI_Sitemap::get_urls( $poll_limit * 4 );
+	// Fetch a large set — enough to represent the whole sitemap for cursor tracking.
+	$all_urls = DC_GI_Sitemap::get_urls( 2000 );
 	if ( is_wp_error( $all_urls ) ) {
 		wp_safe_redirect( add_query_arg(
 			[
@@ -281,9 +282,11 @@ function dc_gi_handle_poll(): void {
 		exit;
 	}
 
-	// Exclude URLs already tracked in the watchlist — no need to re-inspect them.
+	// Build candidate list: exclude watchlist URLs (already submitted) and already-seen URLs this cycle.
 	$watched_urls = array_column( dc_gi_watchlist_get(), 'url' );
-	$all_urls     = array_values( array_diff( $all_urls, $watched_urls ) );
+	$poll_seen    = (array) get_option( 'dc_gi_poll_seen', [] );
+	$eligible     = array_values( array_diff( $all_urls, $watched_urls ) ); // total this cycle cares about
+	$candidates   = array_values( array_diff( $eligible, $poll_seen ) );
 
 	/**
 	 * Coverage states that Google knows the URL but hasn't indexed it yet.
@@ -295,14 +298,16 @@ function dc_gi_handle_poll(): void {
 		'Discovered - currently not indexed',
 	];
 
-	$inspected = 0;
-	$queued    = 0;
-	$skipped   = 0;
-	$errors    = 0;
+	$inspected  = 0;
+	$queued     = 0;
+	$skipped    = 0;
+	$errors     = 0;
+	$newly_seen = [];
 
-	foreach ( array_slice( $all_urls, 0, $poll_limit ) as $url ) {
+	foreach ( array_slice( $candidates, 0, $poll_limit ) as $url ) {
 		$result = DC_GI_JWT::inspect_url( $sa, $url, $site_url );
 		$inspected++;
+		$newly_seen[] = $url;
 
 		if ( is_wp_error( $result ) ) {
 			$errors++;
@@ -320,12 +325,30 @@ function dc_gi_handle_poll(): void {
 		}
 	}
 
+	// Advance the cursor: merge newly inspected into the seen set.
+	$poll_seen     = array_values( array_unique( array_merge( $poll_seen, $newly_seen ) ) );
+	$remaining     = array_diff( $eligible, $poll_seen );
+	$cycle_done    = count( $remaining ) === 0;
+	$cycle_seen    = count( $poll_seen );
+	$cycle_total   = count( $eligible );
+
+	if ( $cycle_done ) {
+		// Full cycle complete — reset cursor so next poll starts fresh.
+		delete_option( 'dc_gi_poll_seen' );
+		$cycle_seen = $cycle_total; // show 100% in UI before reset
+	} else {
+		update_option( 'dc_gi_poll_seen', $poll_seen, false );
+	}
+
 	set_transient( 'dc_gi_last_poll', [
-		'time'      => time(),
-		'inspected' => $inspected,
-		'queued'    => $queued,
-		'skipped'   => $skipped,
-		'errors'    => $errors,
+		'time'        => time(),
+		'inspected'   => $inspected,
+		'queued'      => $queued,
+		'skipped'     => $skipped,
+		'errors'      => $errors,
+		'cycle_seen'  => $cycle_seen,
+		'cycle_total' => $cycle_total,
+		'cycle_done'  => $cycle_done,
 	], DAY_IN_SECONDS );
 
 	wp_safe_redirect( add_query_arg(
@@ -336,6 +359,20 @@ function dc_gi_handle_poll(): void {
 			'inspected' => $inspected,
 			'pqueued'   => $queued,
 		],
+		admin_url( 'admin.php' )
+	) );
+	exit;
+}
+
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_handle_poll_reset(): void {
+	check_admin_referer( 'dc_gi_poll_reset' );
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_die( esc_html__( 'Forbidden', 'dc-google-indexing' ) );
+	}
+	delete_option( 'dc_gi_poll_seen' );
+	wp_safe_redirect( add_query_arg(
+		[ 'page' => 'dc-google-indexing', 'tab' => 'polling', 'notice' => 'poll_reset' ],
 		admin_url( 'admin.php' )
 	) );
 	exit;
@@ -403,6 +440,7 @@ function dc_gi_render_page(): void {
 		'poll_error'      => [ 'error',   esc_html( $errmsg ) ?: __( 'Polling failed.', 'dc-google-indexing' ) ],
 		'watch_cleared'   => [ 'success', __( 'Watchlist cleared.', 'dc-google-indexing' ) ],
 		'watch_checked'   => [ 'success', __( 'Watchlist check complete.', 'dc-google-indexing' ) ],
+		'poll_reset'      => [ 'success', __( 'Poll cycle reset — next run will start from the beginning of the sitemap.', 'dc-google-indexing' ) ],
 	];
 
 	$all_post_types = get_post_types( [ 'public' => true ], 'objects' );
@@ -1302,6 +1340,40 @@ function dc_gi_render_page(): void {
 				<div class="dc-gi-stat-label"><?php esc_html_e( 'Filtered out', 'dc-google-indexing' ); ?></div>
 			</div>
 		</div>
+		<?php if ( ! empty( $last_poll['cycle_total'] ) ) :
+			$cycle_seen  = (int) $last_poll['cycle_seen'];
+			$cycle_total = (int) $last_poll['cycle_total'];
+			$pct         = $cycle_total > 0 ? round( $cycle_seen / $cycle_total * 100 ) : 0;
+			$cycle_done  = ! empty( $last_poll['cycle_done'] );
+		?>
+		<div style="margin:4px 0 12px;max-width:600px">
+			<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+				<span style="font-size:13px;color:#555">
+					<?php if ( $cycle_done ) : ?>
+						<strong style="color:#46b450"><?php esc_html_e( '✅ Cycle complete — cursor reset for next run.', 'dc-google-indexing' ); ?></strong>
+					<?php else : ?>
+						<?php printf(
+							/* translators: 1: seen count 2: total count 3: percent */
+							esc_html__( 'Cycle progress: %1$d / %2$d URLs seen (%3$d%%)', 'dc-google-indexing' ),
+							$cycle_seen,
+							$cycle_total,
+							$pct
+						); ?>
+					<?php endif; ?>
+				</span>
+				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin:0">
+					<?php wp_nonce_field( 'dc_gi_poll_reset' ); ?>
+					<input type="hidden" name="action" value="dc_gi_poll_reset">
+					<button type="submit" class="button button-small"
+						onclick="return confirm('<?php esc_attr_e( 'Reset the poll cursor? Next run will start from the beginning of the sitemap.', 'dc-google-indexing' ); ?>')"
+					><?php esc_html_e( 'Reset Cycle', 'dc-google-indexing' ); ?></button>
+				</form>
+			</div>
+			<div style="background:#e0e0e0;border-radius:4px;height:8px;overflow:hidden">
+				<div style="background:<?php echo $cycle_done ? '#46b450' : '#2271b1'; ?>;width:<?php echo esc_attr( $pct ); ?>%;height:100%;transition:width .3s"></div>
+			</div>
+		</div>
+		<?php endif; ?>
 		<?php if ( $last_poll['errors'] > 0 ) : ?>
 		<p style="color:#dc3232;font-size:13px">
 			<?php printf(
