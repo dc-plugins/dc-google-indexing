@@ -23,6 +23,7 @@ define( 'DC_GI_FILE',        __FILE__ );
 define( 'DC_GI_DIR',         plugin_dir_path( __FILE__ ) );
 define( 'DC_GI_CRON_HOOK',   'dc_gi_process_queue' );
 define( 'DC_GI_WATCH_HOOK',  'dc_gi_check_watchlist' );
+define( 'DC_GI_POLL_HOOK',   'dc_gi_poll_batch' );
 define( 'DC_GI_DAILY_CAP',   200 );
 
 require_once DC_GI_DIR . 'class-jwt.php';
@@ -46,6 +47,12 @@ function dc_gi_cron_schedules( array $schedules ): array {
 		$schedules['dc_gi_sixhourly'] = [
 			'interval' => 6 * HOUR_IN_SECONDS,
 			'display'  => __( 'Every 6 Hours (DC Google Indexing)', 'dc-google-indexing' ),
+		];
+	}
+	if ( ! isset( $schedules['dc_gi_every1'] ) ) {
+		$schedules['dc_gi_every1'] = [
+			'interval' => MINUTE_IN_SECONDS,
+			'display'  => __( 'Every 1 Minute (DC Google Indexing)', 'dc-google-indexing' ),
 		];
 	}
 	return $schedules;
@@ -257,6 +264,122 @@ function dc_gi_run_watchlist_check(): void {
 }
 
 // =============================================================================
+// POLLING BATCH — 5 URLs per run, cursor-aware, lock-protected
+// =============================================================================
+
+add_action( DC_GI_POLL_HOOK, 'dc_gi_run_poll_batch' );
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_run_poll_batch(): void {
+	// Only run when polling is active.
+	if ( ! get_option( 'dc_gi_poll_active', false ) ) {
+		return;
+	}
+	// Simple lock to prevent concurrent cron + AJAX runs.
+	if ( get_transient( 'dc_gi_poll_lock' ) ) {
+		return;
+	}
+	set_transient( 'dc_gi_poll_lock', 1, 60 );
+
+	try {
+		$settings = dc_gi_get_settings();
+		if ( empty( $settings['service_account_json'] ) ) {
+			return;
+		}
+		$sa = json_decode( $settings['service_account_json'], true );
+		if ( ! $sa || empty( $sa['client_email'] ) || empty( $sa['private_key'] ) ) {
+			return;
+		}
+
+		$site_url    = trailingslashit( get_home_url() );
+		$batch_size  = 5;
+		$submittable = [
+			'Crawled - currently not indexed',
+			'Discovered - currently not indexed',
+		];
+
+		$all_urls = DC_GI_Sitemap::get_urls( 2000 );
+		if ( is_wp_error( $all_urls ) ) {
+			return;
+		}
+
+		$watched_urls = array_column( dc_gi_watchlist_get(), 'url' );
+		$poll_seen    = (array) get_option( 'dc_gi_poll_seen', [] );
+		$eligible     = array_values( array_diff( $all_urls, $watched_urls ) );
+		$candidates   = array_values( array_diff( $eligible, $poll_seen ) );
+
+		if ( empty( $candidates ) ) {
+			// Full cycle done — reset cursor and stop polling.
+			delete_option( 'dc_gi_poll_seen' );
+			update_option( 'dc_gi_poll_active', false );
+			set_transient( 'dc_gi_last_poll', array_merge(
+				(array) get_transient( 'dc_gi_last_poll' ),
+				[
+					'cycle_seen'  => count( $eligible ),
+					'cycle_total' => count( $eligible ),
+					'cycle_done'  => true,
+				]
+			), DAY_IN_SECONDS );
+			return;
+		}
+
+		$inspected  = 0;
+		$queued     = 0;
+		$skipped    = 0;
+		$errors     = 0;
+		$newly_seen = [];
+
+		foreach ( array_slice( $candidates, 0, $batch_size ) as $url ) {
+			$result = DC_GI_JWT::inspect_url( $sa, $url, $site_url );
+			$inspected++;
+			$newly_seen[] = $url;
+
+			if ( is_wp_error( $result ) ) {
+				$errors++;
+				dc_gi_add_log( $url, 'INSPECT', $result );
+				continue;
+			}
+
+			$coverage = $result['inspectionResult']['indexStatusResult']['coverageState'] ?? '';
+			if ( in_array( $coverage, $submittable, true ) ) {
+				dc_gi_enqueue_url( $url, 'URL_UPDATED' );
+				$queued++;
+			} else {
+				$skipped++;
+			}
+		}
+
+		// Advance cursor.
+		$poll_seen   = array_values( array_unique( array_merge( $poll_seen, $newly_seen ) ) );
+		$remaining   = array_diff( $eligible, $poll_seen );
+		$cycle_done  = count( $remaining ) === 0;
+		$cycle_seen  = count( $poll_seen );
+		$cycle_total = count( $eligible );
+
+		if ( $cycle_done ) {
+			delete_option( 'dc_gi_poll_seen' );
+			update_option( 'dc_gi_poll_active', false );
+			$cycle_seen = $cycle_total;
+		} else {
+			update_option( 'dc_gi_poll_seen', $poll_seen, false );
+		}
+
+		set_transient( 'dc_gi_last_poll', [
+			'time'        => time(),
+			'inspected'   => $inspected,
+			'queued'      => $queued,
+			'skipped'     => $skipped,
+			'errors'      => $errors,
+			'cycle_seen'  => $cycle_seen,
+			'cycle_total' => $cycle_total,
+			'cycle_done'  => $cycle_done,
+		], DAY_IN_SECONDS );
+
+	} finally {
+		delete_transient( 'dc_gi_poll_lock' );
+	}
+}
+
+// =============================================================================
 // HELPERS
 // =============================================================================
 
@@ -365,6 +488,9 @@ function dc_gi_activate(): void {
 	if ( ! wp_next_scheduled( DC_GI_WATCH_HOOK ) ) {
 		wp_schedule_event( time() + 300, 'dc_gi_sixhourly', DC_GI_WATCH_HOOK );
 	}
+	if ( ! wp_next_scheduled( DC_GI_POLL_HOOK ) ) {
+		wp_schedule_event( time() + 60, 'dc_gi_every1', DC_GI_POLL_HOOK );
+	}
 }
 
 register_deactivation_hook( DC_GI_FILE, 'dc_gi_deactivate' );
@@ -372,4 +498,6 @@ register_deactivation_hook( DC_GI_FILE, 'dc_gi_deactivate' );
 function dc_gi_deactivate(): void {
 	wp_clear_scheduled_hook( DC_GI_CRON_HOOK );
 	wp_clear_scheduled_hook( DC_GI_WATCH_HOOK );
+	wp_clear_scheduled_hook( DC_GI_POLL_HOOK );
+	update_option( 'dc_gi_poll_active', false );
 }

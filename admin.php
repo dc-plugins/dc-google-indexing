@@ -51,11 +51,138 @@ add_action( 'admin_post_dc_gi_submit',     'dc_gi_handle_submit' );
 add_action( 'admin_post_dc_gi_runnow',     'dc_gi_handle_runnow' );
 add_action( 'admin_post_dc_gi_clrqueue',   'dc_gi_handle_clear_queue' );
 add_action( 'admin_post_dc_gi_clrlog',     'dc_gi_handle_clear_log' );
-add_action( 'admin_post_dc_gi_poll',       'dc_gi_handle_poll' );
 add_action( 'admin_post_dc_gi_poll_reset', 'dc_gi_handle_poll_reset' );
 add_action( 'admin_post_dc_gi_watch_del',  'dc_gi_handle_watch_delete' );
 add_action( 'admin_post_dc_gi_watch_clr',  'dc_gi_handle_watch_clear' );
 add_action( 'admin_post_dc_gi_watch_now',  'dc_gi_handle_watch_check_now' );
+
+add_action( 'wp_ajax_dc_gi_poll_start',  'dc_gi_ajax_poll_start' );
+add_action( 'wp_ajax_dc_gi_poll_stop',   'dc_gi_ajax_poll_stop' );
+add_action( 'wp_ajax_dc_gi_poll_status', 'dc_gi_ajax_poll_status' );
+
+add_action( 'admin_enqueue_scripts', 'dc_gi_enqueue_scripts' );
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_enqueue_scripts( string $hook ): void {
+	if ( 'toplevel_page_dc-google-indexing' !== $hook ) {
+		return;
+	}
+	wp_register_script( 'dc-gi-admin', false, [ 'jquery' ], DC_GI_VERSION, true );
+	wp_enqueue_script( 'dc-gi-admin' );
+	wp_localize_script( 'dc-gi-admin', 'dcGiPoll', [
+		'nonce'   => wp_create_nonce( 'dc_gi_ajax' ),
+		'ajaxurl' => admin_url( 'admin-ajax.php' ),
+		'active'  => (bool) get_option( 'dc_gi_poll_active', false ),
+		'i18n'    => [
+			'starting'  => __( 'Starting…', 'dc-google-indexing' ),
+			'stopping'  => __( 'Stopping…', 'dc-google-indexing' ),
+			'running'   => __( '● Running', 'dc-google-indexing' ),
+			'stopped'   => __( '○ Stopped', 'dc-google-indexing' ),
+			'done'      => __( '✅ Cycle complete', 'dc-google-indexing' ),
+			'errComms'  => __( 'Communication error — retrying…', 'dc-google-indexing' ),
+		],
+	] );
+	wp_add_inline_script( 'dc-gi-admin', dc_gi_poll_js() );
+}
+
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_poll_js(): string {
+	return <<<'JS'
+(function($){
+	var interval = null;
+
+	function pct(seen, total) {
+		return total > 0 ? Math.round(seen / total * 100) : 0;
+	}
+
+	function updateUI(data) {
+		var active  = data.active;
+		var lp      = data.last_poll || {};
+		var seen    = data.cycle_seen  || (lp.cycle_seen  || 0);
+		var total   = data.cycle_total || (lp.cycle_total || 0);
+		var done    = lp.cycle_done || false;
+		var p       = pct(seen, total);
+
+		// Status badge
+		var badge = done ? dcGiPoll.i18n.done : (active ? dcGiPoll.i18n.running : dcGiPoll.i18n.stopped);
+		$('#dc-gi-status-badge').text(badge)
+			.attr('class', 'dc-gi-poll-badge ' + (done ? 'done' : (active ? 'running' : 'stopped')));
+
+		// Progress bar
+		$('#dc-gi-prog-bar').css('width', p + '%')
+			.css('background', done ? '#46b450' : '#2271b1');
+		$('#dc-gi-prog-label').text(
+			total > 0 ? seen + ' / ' + total + ' (' + p + '%)' : '—'
+		);
+
+		// Last batch stats
+		if (lp.time) {
+			var d = new Date(lp.time * 1000);
+			var ts = d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+			$('#dc-gi-batch-time').text(ts);
+			$('#dc-gi-batch-inspected').text(lp.inspected || 0);
+			$('#dc-gi-batch-queued').text(lp.queued || 0);
+			$('#dc-gi-batch-skipped').text(lp.skipped || 0);
+			var errEl = $('#dc-gi-batch-errors');
+			errEl.text(lp.errors || 0);
+			errEl.css('color', lp.errors > 0 ? '#dc3232' : 'inherit');
+			$('#dc-gi-last-batch').show();
+		}
+
+		// Queue count
+		$('#dc-gi-queue-count').text(data.queue_count || 0);
+
+		// Buttons
+		$('#dc-gi-start-btn').prop('disabled', active || done).text('▶ Start Polling');
+		$('#dc-gi-stop-btn').prop('disabled', !active);
+
+		// Stop polling the status endpoint if no longer active
+		if (!active && interval) {
+			clearInterval(interval);
+			interval = null;
+		}
+	}
+
+	function fetchStatus() {
+		$.post(dcGiPoll.ajaxurl, {action:'dc_gi_poll_status', nonce:dcGiPoll.nonce})
+			.done(function(r){ if (r.success) updateUI(r.data); })
+			.fail(function(){ $('#dc-gi-status-badge').text(dcGiPoll.i18n.errComms); });
+	}
+
+	$(function(){
+		$('#dc-gi-start-btn').on('click', function(e){
+			e.preventDefault();
+			$(this).prop('disabled', true).text(dcGiPoll.i18n.starting);
+			$.post(dcGiPoll.ajaxurl, {action:'dc_gi_poll_start', nonce:dcGiPoll.nonce})
+				.done(function(r){
+					if (r.success) {
+						updateUI(r.data);
+						if (!interval) interval = setInterval(fetchStatus, 3000);
+					}
+				});
+		});
+
+		$('#dc-gi-stop-btn').on('click', function(e){
+			e.preventDefault();
+			$(this).prop('disabled', true).text(dcGiPoll.i18n.stopping);
+			$.post(dcGiPoll.ajaxurl, {action:'dc_gi_poll_stop', nonce:dcGiPoll.nonce})
+				.done(function(r){
+					if (r.success) {
+						updateUI(r.data);
+						if (interval) { clearInterval(interval); interval = null; }
+					}
+				});
+		});
+
+		// If polling was already active when page loaded, start live updates immediately.
+		if (dcGiPoll.active) {
+			interval = setInterval(fetchStatus, 3000);
+		}
+		// Fetch initial state to populate UI on page load.
+		fetchStatus();
+	});
+}(jQuery));
+JS;
+}
 
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
 function dc_gi_handle_save(): void {
@@ -247,121 +374,48 @@ function dc_gi_handle_watch_check_now(): void {
 }
 
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
-function dc_gi_handle_poll(): void {
-	check_admin_referer( 'dc_gi_poll' );
+function dc_gi_ajax_poll_start(): void {
+	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
 	if ( ! current_user_can( 'manage_options' ) ) {
-		wp_die( esc_html__( 'Forbidden', 'dc-google-indexing' ) );
+		wp_send_json_error( 'Forbidden', 403 );
 	}
+	update_option( 'dc_gi_poll_active', true );
+	// Trigger an immediate batch so the user gets instant feedback.
+	dc_gi_run_poll_batch();
+	wp_send_json_success( dc_gi_poll_status_data() );
+}
 
-	$settings = dc_gi_get_settings();
-	if ( empty( $settings['service_account_json'] ) ) {
-		wp_safe_redirect( add_query_arg(
-			[ 'page' => 'dc-google-indexing', 'tab' => 'polling', 'notice' => 'test_no_sa' ],
-			admin_url( 'admin.php' )
-		) );
-		exit;
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_ajax_poll_stop(): void {
+	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_send_json_error( 'Forbidden', 403 );
 	}
+	update_option( 'dc_gi_poll_active', false );
+	wp_send_json_success( dc_gi_poll_status_data() );
+}
 
-	$sa         = json_decode( $settings['service_account_json'], true );
-	$site_url   = trailingslashit( get_home_url() );
-	// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
-	$poll_limit = min( 200, max( 1, absint( isset( $_POST['poll_limit'] ) ? wp_unslash( $_POST['poll_limit'] ) : 50 ) ) );
-
-	// Fetch a large set — enough to represent the whole sitemap for cursor tracking.
-	$all_urls = DC_GI_Sitemap::get_urls( 2000 );
-	if ( is_wp_error( $all_urls ) ) {
-		wp_safe_redirect( add_query_arg(
-			[
-				'page'   => 'dc-google-indexing',
-				'tab'    => 'polling',
-				'notice' => 'poll_no_sitemap',
-				'errmsg' => rawurlencode( $all_urls->get_error_message() ),
-			],
-			admin_url( 'admin.php' )
-		) );
-		exit;
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_ajax_poll_status(): void {
+	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_send_json_error( 'Forbidden', 403 );
 	}
+	wp_send_json_success( dc_gi_poll_status_data() );
+}
 
-	// Build candidate list: exclude watchlist URLs (already submitted) and already-seen URLs this cycle.
-	$watched_urls = array_column( dc_gi_watchlist_get(), 'url' );
-	$poll_seen    = (array) get_option( 'dc_gi_poll_seen', [] );
-	$eligible     = array_values( array_diff( $all_urls, $watched_urls ) ); // total this cycle cares about
-	$candidates   = array_values( array_diff( $eligible, $poll_seen ) );
-
-	/**
-	 * Coverage states that Google knows the URL but hasn't indexed it yet.
-	 * These are the only states worth re-submitting.
-	 * All error/exclusion states (404, redirect, noindex, robots, canonical, 5xx, etc.) are skipped.
-	 */
-	$submittable = [
-		'Crawled - currently not indexed',
-		'Discovered - currently not indexed',
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_poll_status_data(): array {
+	$last_poll   = get_transient( 'dc_gi_last_poll' );
+	$poll_seen   = (array) get_option( 'dc_gi_poll_seen', [] );
+	$active      = (bool) get_option( 'dc_gi_poll_active', false );
+	return [
+		'active'       => $active,
+		'last_poll'    => $last_poll ?: null,
+		'cycle_seen'   => count( $poll_seen ),
+		'cycle_total'  => $last_poll['cycle_total'] ?? 0,
+		'queue_count'  => count( (array) get_option( 'dc_gi_queue', [] ) ),
 	];
-
-	$inspected  = 0;
-	$queued     = 0;
-	$skipped    = 0;
-	$errors     = 0;
-	$newly_seen = [];
-
-	foreach ( array_slice( $candidates, 0, $poll_limit ) as $url ) {
-		$result = DC_GI_JWT::inspect_url( $sa, $url, $site_url );
-		$inspected++;
-		$newly_seen[] = $url;
-
-		if ( is_wp_error( $result ) ) {
-			$errors++;
-			dc_gi_add_log( $url, 'INSPECT', $result );
-			continue;
-		}
-
-		$coverage_state = $result['inspectionResult']['indexStatusResult']['coverageState'] ?? '';
-
-		if ( in_array( $coverage_state, $submittable, true ) ) {
-			dc_gi_enqueue_url( $url, 'URL_UPDATED' );
-			$queued++;
-		} else {
-			$skipped++;
-		}
-	}
-
-	// Advance the cursor: merge newly inspected into the seen set.
-	$poll_seen     = array_values( array_unique( array_merge( $poll_seen, $newly_seen ) ) );
-	$remaining     = array_diff( $eligible, $poll_seen );
-	$cycle_done    = count( $remaining ) === 0;
-	$cycle_seen    = count( $poll_seen );
-	$cycle_total   = count( $eligible );
-
-	if ( $cycle_done ) {
-		// Full cycle complete — reset cursor so next poll starts fresh.
-		delete_option( 'dc_gi_poll_seen' );
-		$cycle_seen = $cycle_total; // show 100% in UI before reset
-	} else {
-		update_option( 'dc_gi_poll_seen', $poll_seen, false );
-	}
-
-	set_transient( 'dc_gi_last_poll', [
-		'time'        => time(),
-		'inspected'   => $inspected,
-		'queued'      => $queued,
-		'skipped'     => $skipped,
-		'errors'      => $errors,
-		'cycle_seen'  => $cycle_seen,
-		'cycle_total' => $cycle_total,
-		'cycle_done'  => $cycle_done,
-	], DAY_IN_SECONDS );
-
-	wp_safe_redirect( add_query_arg(
-		[
-			'page'      => 'dc-google-indexing',
-			'tab'       => 'polling',
-			'notice'    => 'poll_done',
-			'inspected' => $inspected,
-			'pqueued'   => $queued,
-		],
-		admin_url( 'admin.php' )
-	) );
-	exit;
 }
 
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
@@ -408,11 +462,7 @@ function dc_gi_render_page(): void {
 	// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 	$errmsg = isset( $_GET['errmsg'] ) ? rawurldecode( sanitize_text_field( wp_unslash( $_GET['errmsg'] ) ) ) : '';
 	// phpcs:ignore WordPress.Security.NonceVerification.Recommended
-	$queued_count      = absint( isset( $_GET['count'] ) ? wp_unslash( $_GET['count'] ) : 0 );
-	// phpcs:ignore WordPress.Security.NonceVerification.Recommended
-	$poll_inspected    = absint( isset( $_GET['inspected'] ) ? wp_unslash( $_GET['inspected'] ) : 0 );
-	// phpcs:ignore WordPress.Security.NonceVerification.Recommended
-	$poll_queued       = absint( isset( $_GET['pqueued'] ) ? wp_unslash( $_GET['pqueued'] ) : 0 );
+	$queued_count = absint( isset( $_GET['count'] ) ? wp_unslash( $_GET['count'] ) : 0 );
 
 	$last_poll = get_transient( 'dc_gi_last_poll' );
 
@@ -430,12 +480,6 @@ function dc_gi_render_page(): void {
 		'test_ok'         => [ 'success', __( '&#10003; Connection successful — credentials are valid.', 'dc-google-indexing' ) ],
 		'test_fail'       => [ 'error',   esc_html( $errmsg ) ?: __( 'Connection failed.', 'dc-google-indexing' ) ],
 		'test_no_sa'      => [ 'error',   __( 'No service account saved. Paste your JSON and save first.', 'dc-google-indexing' ) ],
-		'poll_done'       => [ 'success', sprintf(
-			/* translators: 1: number of URLs inspected 2: number queued */
-			__( 'Polling complete: %1$d URL(s) inspected, %2$d added to queue.', 'dc-google-indexing' ),
-			$poll_inspected,
-			$poll_queued
-		) ],
 		'poll_no_sitemap' => [ 'error',   esc_html( $errmsg ) ?: __( 'No sitemap found. Ensure your site has a public XML sitemap.', 'dc-google-indexing' ) ],
 		'poll_error'      => [ 'error',   esc_html( $errmsg ) ?: __( 'Polling failed.', 'dc-google-indexing' ) ],
 		'watch_cleared'   => [ 'success', __( 'Watchlist cleared.', 'dc-google-indexing' ) ],
@@ -1406,31 +1450,66 @@ function dc_gi_render_page(): void {
 		</div>
 		<?php else : ?>
 
-		<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="max-width:500px">
-			<?php wp_nonce_field( 'dc_gi_poll' ); ?>
-			<input type="hidden" name="action" value="dc_gi_poll">
-			<table class="form-table" role="presentation" style="margin-top:0">
-				<tr>
-					<th scope="row" style="width:180px">
-						<label for="poll_limit"><?php esc_html_e( 'URLs to inspect', 'dc-google-indexing' ); ?></label>
-					</th>
-					<td>
-						<input type="number" id="poll_limit" name="poll_limit" value="50" min="1" max="200" class="small-text">
-						<p class="description">
-							<?php esc_html_e( 'Max 200. Each URL costs 1 inspection from your 2,000/day quota. Start small (10–50) to see how many unindexed pages you have before running larger batches.', 'dc-google-indexing' ); ?>
-						</p>
-					</td>
-				</tr>
-			</table>
-			<p>
-				<button type="submit" class="button button-primary">
-					<?php esc_html_e( '🔍 Start Polling', 'dc-google-indexing' ); ?>
-				</button>
-				<span class="description" style="margin-left:10px">
-					<?php esc_html_e( 'This may take 30–60 seconds for large batches.', 'dc-google-indexing' ); ?>
-				</span>
+		<style>
+		.dc-gi-poll-badge { display:inline-block; padding:3px 12px; border-radius:12px; font-size:13px; font-weight:600; }
+		.dc-gi-poll-badge.running { background:#d1e7dd; color:#0a3622; }
+		.dc-gi-poll-badge.stopped { background:#f8d7da; color:#58151c; }
+		.dc-gi-poll-badge.done    { background:#d1e7dd; color:#0a3622; }
+		.dc-gi-live-panel { background:#f6f7f7; border:1px solid #ddd; border-radius:6px; padding:18px 20px; max-width:680px; margin-bottom:16px; }
+		.dc-gi-live-panel table { width:100%; border-collapse:collapse; font-size:13px; }
+		.dc-gi-live-panel td { padding:4px 8px 4px 0; color:#555; }
+		.dc-gi-live-panel td:first-child { width:130px; font-weight:600; color:#1d2327; }
+		#dc-gi-prog-track { background:#ddd; border-radius:4px; height:10px; margin:8px 0 4px; overflow:hidden; }
+		#dc-gi-prog-bar { height:100%; width:0; background:#2271b1; border-radius:4px; transition:width .4s; }
+		</style>
+
+		<div class="dc-gi-live-panel">
+			<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+				<span id="dc-gi-status-badge" class="dc-gi-poll-badge stopped"><?php esc_html_e( '○ Stopped', 'dc-google-indexing' ); ?></span>
+				<button id="dc-gi-start-btn" class="button button-primary"><?php esc_html_e( '▶ Start Polling', 'dc-google-indexing' ); ?></button>
+				<button id="dc-gi-stop-btn" class="button" disabled><?php esc_html_e( '■ Stop', 'dc-google-indexing' ); ?></button>
+				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin:0">
+					<?php wp_nonce_field( 'dc_gi_poll_reset' ); ?>
+					<input type="hidden" name="action" value="dc_gi_poll_reset">
+					<button type="submit" class="button button-small"
+						onclick="return confirm('<?php esc_attr_e( 'Reset the poll cursor? Next run will start from the beginning of the sitemap.', 'dc-google-indexing' ); ?>')"
+					><?php esc_html_e( '↺ Reset Cycle', 'dc-google-indexing' ); ?></button>
+				</form>
+			</div>
+
+			<div>
+				<div style="display:flex;justify-content:space-between;font-size:12px;color:#777;margin-bottom:2px">
+					<span><?php esc_html_e( 'Cycle progress', 'dc-google-indexing' ); ?></span>
+					<span id="dc-gi-prog-label">—</span>
+				</div>
+				<div id="dc-gi-prog-track"><div id="dc-gi-prog-bar"></div></div>
+			</div>
+
+			<div id="dc-gi-last-batch" style="display:none;margin-top:12px">
+				<p style="font-size:12px;color:#888;margin:0 0 6px">
+					<?php esc_html_e( 'Last batch:', 'dc-google-indexing' ); ?>
+					<strong id="dc-gi-batch-time"></strong>
+				</p>
+				<table>
+					<tr>
+						<td><?php esc_html_e( 'Inspected', 'dc-google-indexing' ); ?></td>
+						<td><strong id="dc-gi-batch-inspected">0</strong></td>
+						<td style="padding-left:24px"><?php esc_html_e( 'Queued', 'dc-google-indexing' ); ?></td>
+						<td><strong id="dc-gi-batch-queued" style="color:#46b450">0</strong></td>
+					</tr>
+					<tr>
+						<td><?php esc_html_e( 'Filtered', 'dc-google-indexing' ); ?></td>
+						<td><strong id="dc-gi-batch-skipped">0</strong></td>
+						<td style="padding-left:24px"><?php esc_html_e( 'Errors', 'dc-google-indexing' ); ?></td>
+						<td><strong id="dc-gi-batch-errors">0</strong></td>
+					</tr>
+				</table>
+			</div>
+
+			<p style="font-size:12px;color:#888;margin:10px 0 0">
+				<?php esc_html_e( '5 URLs per batch · runs every 1 minute via WP-Cron · continues if you leave this page', 'dc-google-indexing' ); ?>&ensp;|&ensp;<?php esc_html_e( 'Queue:', 'dc-google-indexing' ); ?> <strong id="dc-gi-queue-count">—</strong>
 			</p>
-		</form>
+		</div>
 
 		<?php endif; ?>
 
