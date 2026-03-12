@@ -648,8 +648,10 @@ function dc_gi_ajax_watch_check_one(): void {
 		wp_schedule_single_event( time() + 30, DC_GI_WATCH_CHECK_HOOK );
 	}
 
-	// Advance offset past already-indexed entries.
-	while ( $offset < $total && 'indexed' === ( $list[ $keys[ $offset ] ]['status'] ?? '' ) ) {
+	$done_statuses = [ 'indexed', 'removed' ];
+
+	// Advance offset past already-done entries.
+	while ( $offset < $total && in_array( $list[ $keys[ $offset ] ]['status'] ?? '', $done_statuses, true ) ) {
 		$offset++;
 	}
 
@@ -672,7 +674,12 @@ function dc_gi_ajax_watch_check_one(): void {
 	} else {
 		$coverage          = $result['inspectionResult']['indexStatusResult']['coverageState'] ?? '';
 		$entry['coverage'] = $coverage;
-		if ( 'Submitted and indexed' === $coverage
+		if ( 'removal_pending' === $entry['status'] ) {
+			if ( '' === $coverage || 'URL is unknown to Google' === $coverage
+				|| 'Not found (404)' === $coverage || 'Soft 404' === $coverage ) {
+				$entry['status'] = 'removed';
+			}
+		} elseif ( 'Submitted and indexed' === $coverage
 			|| 'Indexed, not submitted in sitemap' === $coverage ) {
 			$entry['status'] = 'indexed';
 		} elseif ( '' === $coverage || 'URL is unknown to Google' === $coverage ) {
@@ -687,9 +694,10 @@ function dc_gi_ajax_watch_check_one(): void {
 	unset( $entry );
 	update_option( 'dc_gi_watchlist', $list, false );
 
-	$next_offset = $offset + 1;
-	// Skip any trailing already-indexed entries for the next call.
-	while ( $next_offset < $total && 'indexed' === ( $list[ $keys[ $next_offset ] ]['status'] ?? '' ) ) {
+	$done_statuses = [ 'indexed', 'removed' ];
+	$next_offset   = $offset + 1;
+	// Skip any trailing already-done entries for the next call.
+	while ( $next_offset < $total && in_array( $list[ $keys[ $next_offset ] ]['status'] ?? '', $done_statuses, true ) ) {
 		$next_offset++;
 	}
 
@@ -1060,6 +1068,7 @@ function dc_gi_render_page(): void {
 	/* Badges */
 	.dc-gi-wl-badge{display:inline-block;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:600}
 	.dc-gi-wl-badge.pending{background:rgba(255,141,114,.15);color:#ff8d72}.dc-gi-wl-badge.indexed{background:rgba(0,242,195,.15);color:#00f2c3}.dc-gi-wl-badge.error{background:rgba(253,93,147,.15);color:#fd5d93}
+	.dc-gi-wl-badge.removal_pending{background:rgba(29,140,248,.15);color:#1d8cf8}.dc-gi-wl-badge.removed{background:rgba(200,208,224,.12);color:#8892a4}
 	/* Tables */
 	.dc-gi-panel .widefat{border-color:#2d3555!important;background:#1e2236!important}
 	.dc-gi-panel .widefat thead th{background:#252a45!important;color:#6e7a90!important;border-bottom:1px solid #2d3555!important;font-size:11px;text-transform:uppercase;letter-spacing:.4px}
@@ -1800,8 +1809,10 @@ function dc_gi_render_page(): void {
 		</p>
 
 		<?php
-		$watch_pending = array_filter( $watchlist, fn( $e ) => 'pending' === $e['status'] );
-		$watch_indexed = array_filter( $watchlist, fn( $e ) => 'indexed' === $e['status'] );
+		$watch_pending         = array_filter( $watchlist, fn( $e ) => 'pending' === $e['status'] );
+		$watch_indexed         = array_filter( $watchlist, fn( $e ) => 'indexed' === $e['status'] );
+		$watch_removal_pending = array_filter( $watchlist, fn( $e ) => 'removal_pending' === $e['status'] );
+		$watch_removed         = array_filter( $watchlist, fn( $e ) => 'removed' === $e['status'] );
 		$next_watch    = wp_next_scheduled( DC_GI_WATCH_HOOK );
 		?>
 
@@ -1851,19 +1862,29 @@ function dc_gi_render_page(): void {
 			</div>
 		</div>
 
-		<div style="display:flex;gap:20px;margin-bottom:20px">
-			<div class="dc-gi-stat" style="min-width:120px">
+		<div style="display:flex;gap:20px;margin-bottom:20px;flex-wrap:wrap">
+			<div class="dc-gi-stat" style="min-width:110px">
 				<div class="dc-gi-stat-num"><?php echo esc_html( (string) count( $watchlist ) ); ?></div>
 				<div class="dc-gi-stat-label"><?php esc_html_e( 'Total', 'dc-google-indexing' ); ?></div>
 			</div>
-			<div class="dc-gi-stat" style="min-width:120px">
-				<div class="dc-gi-stat-num" style="color:#856404"><?php echo esc_html( (string) count( $watch_pending ) ); ?></div>
+			<div class="dc-gi-stat" style="min-width:110px">
+				<div class="dc-gi-stat-num" style="color:#ff8d72"><?php echo esc_html( (string) count( $watch_pending ) ); ?></div>
 				<div class="dc-gi-stat-label"><?php esc_html_e( 'Pending', 'dc-google-indexing' ); ?></div>
 			</div>
-			<div class="dc-gi-stat green" style="min-width:120px">
+			<div class="dc-gi-stat green" style="min-width:110px">
 				<div class="dc-gi-stat-num"><?php echo esc_html( (string) count( $watch_indexed ) ); ?></div>
 				<div class="dc-gi-stat-label"><?php esc_html_e( 'Indexed', 'dc-google-indexing' ); ?></div>
 			</div>
+			<?php if ( count( $watch_removal_pending ) > 0 || count( $watch_removed ) > 0 ) : ?>
+			<div class="dc-gi-stat" style="min-width:110px">
+				<div class="dc-gi-stat-num" style="color:#1d8cf8"><?php echo esc_html( (string) count( $watch_removal_pending ) ); ?></div>
+				<div class="dc-gi-stat-label"><?php esc_html_e( 'Removal Pending', 'dc-google-indexing' ); ?></div>
+			</div>
+			<div class="dc-gi-stat" style="min-width:110px">
+				<div class="dc-gi-stat-num" style="color:#8892a4"><?php echo esc_html( (string) count( $watch_removed ) ); ?></div>
+				<div class="dc-gi-stat-label"><?php esc_html_e( 'Removed', 'dc-google-indexing' ); ?></div>
+			</div>
+			<?php endif; ?>
 		</div>
 
 		<?php if ( empty( $watchlist ) ) : ?>
@@ -1882,8 +1903,11 @@ function dc_gi_render_page(): void {
 			</thead>
 			<tbody id="dc-gi-wl-tbody">
 				<?php foreach ( $watchlist as $entry ) :
-					$badge_class = in_array( $entry['status'], [ 'pending', 'indexed', 'error' ], true )
+					$badge_class = in_array( $entry['status'], [ 'pending', 'indexed', 'error', 'removal_pending', 'removed' ], true )
 						? $entry['status'] : 'pending';
+					$badge_label = 'removal_pending' === $entry['status']
+						? __( 'Removal Pending', 'dc-google-indexing' )
+						: ucfirst( $entry['status'] );
 				?>
 				<tr data-wl-url="<?php echo esc_attr( $entry['url'] ); ?>">
 					<td>
@@ -1891,7 +1915,7 @@ function dc_gi_render_page(): void {
 							<?php echo esc_html( $entry['url'] ); ?>
 						</a>
 					</td>
-					<td><span class="dc-gi-wl-badge <?php echo esc_attr( $badge_class ); ?>"><?php echo esc_html( ucfirst( $entry['status'] ) ); ?></span></td>
+					<td><span class="dc-gi-wl-badge <?php echo esc_attr( $badge_class ); ?>"><?php echo esc_html( $badge_label ); ?></span></td>
 					<td><?php echo esc_html( $entry['coverage'] ?: '—' ); ?></td>
 					<td><?php echo esc_html( wp_date( 'Y-m-d H:i', $entry['submitted_at'] ) ); ?></td>
 					<td><?php echo $entry['last_checked'] ? esc_html( wp_date( 'Y-m-d H:i', $entry['last_checked'] ) ) : '—'; ?></td>

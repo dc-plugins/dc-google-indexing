@@ -159,9 +159,13 @@ function dc_gi_add_log( string $url, string $type, $result ): void {
 	] );
 	update_option( 'dc_gi_log', array_slice( $log, 0, 100 ), false );
 
-	// On successful submission, add to watchlist so we can track when Google indexes it.
-	if ( ! is_wp_error( $result ) && 'URL_DELETED' !== $type ) {
-		dc_gi_watchlist_add( $url );
+	// On successful submission, add to watchlist to track indexing / removal.
+	if ( ! is_wp_error( $result ) ) {
+		if ( 'URL_DELETED' === $type ) {
+			dc_gi_watchlist_add( $url, 'removal_pending' );
+		} else {
+			dc_gi_watchlist_add( $url );
+		}
 	}
 }
 
@@ -174,17 +178,25 @@ function dc_gi_add_log( string $url, string $type, $result ): void {
  * Status: 'pending' → 'indexed' once Google confirms.
  */
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
-function dc_gi_watchlist_add( string $url ): void {
+function dc_gi_watchlist_add( string $url, string $status = 'pending' ): void {
 	$list = get_option( 'dc_gi_watchlist', [] );
-	foreach ( $list as $entry ) {
+	foreach ( $list as &$entry ) {
 		if ( $entry['url'] === $url ) {
-			return; // Already watching.
+			// If re-submitted for deletion, upgrade existing entry status.
+			if ( 'removal_pending' === $status && 'removed' !== $entry['status'] ) {
+				$entry['status']    = 'removal_pending';
+				$entry['submitted_at'] = time();
+				unset( $entry );
+				update_option( 'dc_gi_watchlist', $list, false );
+			}
+			return;
 		}
 	}
+	unset( $entry );
 	array_unshift( $list, [
 		'url'          => esc_url_raw( $url ),
 		'submitted_at' => time(),
-		'status'       => 'pending',
+		'status'       => in_array( $status, [ 'pending', 'removal_pending' ], true ) ? $status : 'pending',
 		'last_checked' => 0,
 		'coverage'     => '',
 	] );
@@ -231,8 +243,10 @@ function dc_gi_run_watchlist_check(): void {
 	$updated  = false;
 	$checked  = 0;
 
+	$done_statuses = [ 'indexed', 'removed' ];
+
 	foreach ( $list as &$entry ) {
-		if ( 'indexed' === $entry['status'] ) {
+		if ( in_array( $entry['status'], $done_statuses, true ) ) {
 			continue; // Already done.
 		}
 		if ( $checked >= 20 ) {
@@ -252,7 +266,13 @@ function dc_gi_run_watchlist_check(): void {
 		$coverage = $result['inspectionResult']['indexStatusResult']['coverageState'] ?? '';
 		$entry['coverage'] = $coverage;
 
-		if ( 'Submitted and indexed' === $coverage
+		if ( 'removal_pending' === $entry['status'] ) {
+			// Waiting for de-indexing — mark removed when Google no longer knows the URL.
+			if ( '' === $coverage || 'URL is unknown to Google' === $coverage
+				|| 'Not found (404)' === $coverage || 'Soft 404' === $coverage ) {
+				$entry['status'] = 'removed';
+			}
+		} elseif ( 'Submitted and indexed' === $coverage
 			|| 'Indexed, not submitted in sitemap' === $coverage ) {
 			$entry['status'] = 'indexed';
 		} elseif ( '' === $coverage || 'URL is unknown to Google' === $coverage ) {
@@ -559,8 +579,10 @@ function dc_gi_run_watch_check_one_cron(): void {
 	$keys     = array_keys( $list );
 	$total    = count( $keys );
 
-	// Advance past already-indexed entries.
-	while ( $offset < $total && 'indexed' === ( $list[ $keys[ $offset ] ]['status'] ?? '' ) ) {
+	$done_statuses = [ 'indexed', 'removed' ];
+
+	// Advance past already-done entries.
+	while ( $offset < $total && in_array( $list[ $keys[ $offset ] ]['status'] ?? '', $done_statuses, true ) ) {
 		$offset++;
 	}
 
@@ -583,7 +605,12 @@ function dc_gi_run_watch_check_one_cron(): void {
 	} else {
 		$coverage          = $result['inspectionResult']['indexStatusResult']['coverageState'] ?? '';
 		$entry['coverage'] = $coverage;
-		if ( 'Submitted and indexed' === $coverage || 'Indexed, not submitted in sitemap' === $coverage ) {
+		if ( 'removal_pending' === $entry['status'] ) {
+			if ( '' === $coverage || 'URL is unknown to Google' === $coverage
+				|| 'Not found (404)' === $coverage || 'Soft 404' === $coverage ) {
+				$entry['status'] = 'removed';
+			}
+		} elseif ( 'Submitted and indexed' === $coverage || 'Indexed, not submitted in sitemap' === $coverage ) {
 			$entry['status'] = 'indexed';
 		} elseif ( '' === $coverage || 'URL is unknown to Google' === $coverage ) {
 			dc_gi_enqueue_url( $entry['url'], 'URL_UPDATED' );
@@ -597,7 +624,7 @@ function dc_gi_run_watch_check_one_cron(): void {
 	update_option( 'dc_gi_watchlist', $list, false );
 
 	$next = $offset + 1;
-	while ( $next < $total && 'indexed' === ( $list[ $keys[ $next ] ]['status'] ?? '' ) ) {
+	while ( $next < $total && in_array( $list[ $keys[ $next ] ]['status'] ?? '', $done_statuses, true ) ) {
 		$next++;
 	}
 
