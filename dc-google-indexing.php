@@ -21,9 +21,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 define( 'DC_GI_VERSION',     '1.0.0' );
 define( 'DC_GI_FILE',        __FILE__ );
 define( 'DC_GI_DIR',         plugin_dir_path( __FILE__ ) );
-define( 'DC_GI_CRON_HOOK',   'dc_gi_process_queue' );
-define( 'DC_GI_WATCH_HOOK',  'dc_gi_check_watchlist' );
-define( 'DC_GI_POLL_HOOK',   'dc_gi_poll_batch' );
+define( 'DC_GI_CRON_HOOK',        'dc_gi_process_queue' );
+define( 'DC_GI_WATCH_HOOK',       'dc_gi_check_watchlist' );
+define( 'DC_GI_WATCH_CHECK_HOOK', 'dc_gi_watch_check_one_cron' );
+define( 'DC_GI_POLL_HOOK',        'dc_gi_poll_batch' );
 define( 'DC_GI_DAILY_CAP',   200 );
 
 require_once DC_GI_DIR . 'class-jwt.php';
@@ -254,6 +255,9 @@ function dc_gi_run_watchlist_check(): void {
 		if ( 'Submitted and indexed' === $coverage
 			|| 'Indexed, not submitted in sitemap' === $coverage ) {
 			$entry['status'] = 'indexed';
+		} elseif ( '' === $coverage || 'URL is unknown to Google' === $coverage ) {
+			// Google has never seen this URL — re-submit via Indexing API.
+			dc_gi_enqueue_url( $entry['url'], 'URL_UPDATED' );
 		}
 	}
 	unset( $entry );
@@ -269,37 +273,39 @@ function dc_gi_run_watchlist_check(): void {
 
 add_action( DC_GI_POLL_HOOK, 'dc_gi_run_poll_batch' );
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
-function dc_gi_run_poll_batch(): void {
-	// Only run when polling is active.
-	if ( ! get_option( 'dc_gi_poll_active', false ) ) {
-		return;
+function dc_gi_run_poll_batch( bool $force = false ): string {
+	// Only run when polling is active (skip check when forced via manual trigger).
+	if ( ! $force && ! get_option( 'dc_gi_poll_active', false ) ) {
+		return 'early:not_active';
 	}
 	// Simple lock to prevent concurrent cron + AJAX runs.
 	if ( get_transient( 'dc_gi_poll_lock' ) ) {
-		return;
+		return 'early:locked';
 	}
-	set_transient( 'dc_gi_poll_lock', 1, 60 );
+	set_transient( 'dc_gi_poll_lock', 1, 30 );
 
 	try {
 		$settings = dc_gi_get_settings();
 		if ( empty( $settings['service_account_json'] ) ) {
-			return;
+			return 'early:no_service_account';
 		}
 		$sa = json_decode( $settings['service_account_json'], true );
 		if ( ! $sa || empty( $sa['client_email'] ) || empty( $sa['private_key'] ) ) {
-			return;
+			return 'early:invalid_service_account';
 		}
 
 		$site_url    = trailingslashit( get_home_url() );
-		$batch_size  = 5;
+		$batch_size  = 1;
 		$submittable = [
 			'Crawled - currently not indexed',
 			'Discovered - currently not indexed',
+			'URL is unknown to Google', // Never seen by Google — submit to make it discoverable.
+			'',                          // API returns empty string for completely unknown URLs.
 		];
 
 		$all_urls = DC_GI_Sitemap::get_urls( 2000 );
 		if ( is_wp_error( $all_urls ) ) {
-			return;
+			return 'early:sitemap_error:' . $all_urls->get_error_message();
 		}
 
 		$watched_urls = array_column( dc_gi_watchlist_get(), 'url' );
@@ -310,7 +316,7 @@ function dc_gi_run_poll_batch(): void {
 		if ( empty( $candidates ) ) {
 			// Full cycle done — reset cursor and stop polling.
 			delete_option( 'dc_gi_poll_seen' );
-			update_option( 'dc_gi_poll_active', false );
+			dc_gi_set_poll_active( false );
 			set_transient( 'dc_gi_last_poll', array_merge(
 				(array) get_transient( 'dc_gi_last_poll' ),
 				[
@@ -319,7 +325,7 @@ function dc_gi_run_poll_batch(): void {
 					'cycle_done'  => true,
 				]
 			), DAY_IN_SECONDS );
-			return;
+			return 'cycle_complete';
 		}
 
 		$inspected  = 0;
@@ -355,24 +361,37 @@ function dc_gi_run_poll_batch(): void {
 		$cycle_seen  = count( $poll_seen );
 		$cycle_total = count( $eligible );
 
+		// Carry forward cumulative cycle totals from previous batches.
+		$prev             = (array) get_transient( 'dc_gi_last_poll' );
+		$cycle_inspected  = ( $prev['cycle_inspected'] ?? 0 ) + $inspected;
+		$cycle_queued     = ( $prev['cycle_queued']    ?? 0 ) + $queued;
+		$cycle_skipped    = ( $prev['cycle_skipped']   ?? 0 ) + $skipped;
+		$cycle_errors     = ( $prev['cycle_errors']    ?? 0 ) + $errors;
+
 		if ( $cycle_done ) {
 			delete_option( 'dc_gi_poll_seen' );
-			update_option( 'dc_gi_poll_active', false );
+			dc_gi_set_poll_active( false );
 			$cycle_seen = $cycle_total;
 		} else {
 			update_option( 'dc_gi_poll_seen', $poll_seen, false );
 		}
 
 		set_transient( 'dc_gi_last_poll', [
-			'time'        => time(),
-			'inspected'   => $inspected,
-			'queued'      => $queued,
-			'skipped'     => $skipped,
-			'errors'      => $errors,
-			'cycle_seen'  => $cycle_seen,
-			'cycle_total' => $cycle_total,
-			'cycle_done'  => $cycle_done,
+			'time'             => time(),
+			'inspected'        => $inspected,
+			'queued'           => $queued,
+			'skipped'          => $skipped,
+			'errors'           => $errors,
+			'cycle_inspected'  => $cycle_inspected,
+			'cycle_queued'     => $cycle_queued,
+			'cycle_skipped'    => $cycle_skipped,
+			'cycle_errors'     => $cycle_errors,
+			'cycle_seen'       => $cycle_seen,
+			'cycle_total'      => $cycle_total,
+			'cycle_done'       => $cycle_done,
 		], DAY_IN_SECONDS );
+
+		return 'ok';
 
 	} finally {
 		delete_transient( 'dc_gi_poll_lock' );
@@ -386,6 +405,24 @@ function dc_gi_run_poll_batch(): void {
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
 function dc_gi_get_settings(): array {
 	return (array) get_option( 'dc_gi_settings', [] );
+}
+
+/**
+ * Reliably write dc_gi_poll_active — update_option silently fails if the row doesn't exist.
+ */
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_set_poll_active( bool $active ): void {
+	global $wpdb;
+	$exists = (int) $wpdb->get_var( $wpdb->prepare(
+		"SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name = %s",
+		'dc_gi_poll_active'
+	) );
+	if ( $exists ) {
+		$wpdb->update( $wpdb->options, [ 'option_value' => $active ? '1' : '' ], [ 'option_name' => 'dc_gi_poll_active' ] );
+	} else {
+		$wpdb->insert( $wpdb->options, [ 'option_name' => 'dc_gi_poll_active', 'option_value' => $active ? '1' : '', 'autoload' => 'yes' ] );
+	}
+	wp_cache_delete( 'dc_gi_poll_active', 'options' );
 }
 
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
@@ -493,11 +530,96 @@ function dc_gi_activate(): void {
 	}
 }
 
+// =============================================================================
+// WATCH CHECK-ONE CRON — drives the live-check loop server-side when JS is gone
+// =============================================================================
+
+add_action( DC_GI_WATCH_CHECK_HOOK, 'dc_gi_run_watch_check_one_cron' );
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_run_watch_check_one_cron(): void {
+	// Bail if the user already stopped via JS.
+	if ( ! get_option( 'dc_gi_watch_active', false ) ) {
+		return;
+	}
+
+	$settings = dc_gi_get_settings();
+	if ( empty( $settings['service_account_json'] ) ) {
+		delete_option( 'dc_gi_watch_active' );
+		return;
+	}
+	$sa = json_decode( $settings['service_account_json'], true );
+	if ( ! $sa || empty( $sa['client_email'] ) || empty( $sa['private_key'] ) ) {
+		delete_option( 'dc_gi_watch_active' );
+		return;
+	}
+
+	$offset   = (int) get_option( 'dc_gi_watch_offset', 0 );
+	$site_url = trailingslashit( get_home_url() );
+	$list     = get_option( 'dc_gi_watchlist', [] );
+	$keys     = array_keys( $list );
+	$total    = count( $keys );
+
+	// Advance past already-indexed entries.
+	while ( $offset < $total && 'indexed' === ( $list[ $keys[ $offset ] ]['status'] ?? '' ) ) {
+		$offset++;
+	}
+
+	if ( $offset >= $total ) {
+		// All done — clean up.
+		delete_option( 'dc_gi_watch_active' );
+		delete_option( 'dc_gi_watch_offset' );
+		return;
+	}
+
+	$key   = $keys[ $offset ];
+	$entry = &$list[ $key ];
+
+	$result            = DC_GI_JWT::inspect_url( $sa, $entry['url'], $site_url );
+	$entry['last_checked'] = time();
+
+	if ( is_wp_error( $result ) ) {
+		$entry['coverage'] = 'error: ' . $result->get_error_message();
+		$entry['status']   = 'error';
+	} else {
+		$coverage          = $result['inspectionResult']['indexStatusResult']['coverageState'] ?? '';
+		$entry['coverage'] = $coverage;
+		if ( 'Submitted and indexed' === $coverage || 'Indexed, not submitted in sitemap' === $coverage ) {
+			$entry['status'] = 'indexed';
+		} elseif ( '' === $coverage || 'URL is unknown to Google' === $coverage ) {
+			dc_gi_enqueue_url( $entry['url'], 'URL_UPDATED' );
+			$entry['coverage'] = 'URL is unknown to Google (re-queued for submission)';
+			$entry['status']   = 'pending';
+		} else {
+			$entry['status'] = 'pending';
+		}
+	}
+	unset( $entry );
+	update_option( 'dc_gi_watchlist', $list, false );
+
+	$next = $offset + 1;
+	while ( $next < $total && 'indexed' === ( $list[ $keys[ $next ] ]['status'] ?? '' ) ) {
+		$next++;
+	}
+
+	if ( $next >= $total ) {
+		// Cycle complete.
+		delete_option( 'dc_gi_watch_active' );
+		delete_option( 'dc_gi_watch_offset' );
+	} else {
+		// Advance cursor and schedule next single-event cron in 2 s.
+		update_option( 'dc_gi_watch_offset', $next, false );
+		wp_schedule_single_event( time() + 2, DC_GI_WATCH_CHECK_HOOK );
+	}
+}
+
 register_deactivation_hook( DC_GI_FILE, 'dc_gi_deactivate' );
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
 function dc_gi_deactivate(): void {
 	wp_clear_scheduled_hook( DC_GI_CRON_HOOK );
 	wp_clear_scheduled_hook( DC_GI_WATCH_HOOK );
+	wp_clear_scheduled_hook( DC_GI_WATCH_CHECK_HOOK );
 	wp_clear_scheduled_hook( DC_GI_POLL_HOOK );
 	update_option( 'dc_gi_poll_active', false );
+	delete_option( 'dc_gi_watch_active' );
+	delete_option( 'dc_gi_watch_offset' );
 }
