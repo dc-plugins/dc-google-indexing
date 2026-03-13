@@ -587,7 +587,17 @@ function dc_gi_handle_watch_check_now(): void {
 	if ( ! current_user_can( 'manage_options' ) ) {
 		wp_die( esc_html__( 'Forbidden', 'dc-google-indexing' ) );
 	}
+	// Run the immediate batch check (up to 20 pending URLs).
 	dc_gi_run_watchlist_check();
+	// Schedule a recurring 1-minute cron so any remaining pending URLs continue
+	// to be checked automatically even after this page request ends.
+	// Offset is reset to 0 so the cron sweeps the full list; URLs already checked
+	// above will be re-evaluated at most once with negligible quota cost.
+	update_option( 'dc_gi_watch_active', true, false );
+	update_option( 'dc_gi_watch_offset', 0, false );
+	if ( ! wp_next_scheduled( DC_GI_WATCH_CHECK_HOOK ) ) {
+		wp_schedule_event( time() + 60, 'dc_gi_every1', DC_GI_WATCH_CHECK_HOOK );
+	}
 	wp_safe_redirect( add_query_arg(
 		[ 'page' => 'dc-google-indexing', 'tab' => 'watchlist', 'notice' => 'watch_checked' ],
 		admin_url( 'admin.php' )
@@ -643,9 +653,9 @@ function dc_gi_ajax_watch_check_one(): void {
 	update_option( 'dc_gi_watch_active', true, false );
 	update_option( 'dc_gi_watch_offset', $offset, false );
 
-	// Schedule a cron safety-net 30 s from now in case this request never returns.
+	// Ensure a recurring 1-minute cron is running as a fallback in case JS disconnects.
 	if ( ! wp_next_scheduled( DC_GI_WATCH_CHECK_HOOK ) ) {
-		wp_schedule_single_event( time() + 30, DC_GI_WATCH_CHECK_HOOK );
+		wp_schedule_event( time() + 60, 'dc_gi_every1', DC_GI_WATCH_CHECK_HOOK );
 	}
 
 	$done_statuses = [ 'indexed', 'removed' ];
@@ -709,11 +719,8 @@ function dc_gi_ajax_watch_check_one(): void {
 		delete_option( 'dc_gi_watch_offset' );
 		wp_clear_scheduled_hook( DC_GI_WATCH_CHECK_HOOK );
 	} else {
-		// Keep cursor up to date so cron safety-net starts from the right place.
+		// Keep cursor up to date so the recurring cron continues from the right place.
 		update_option( 'dc_gi_watch_offset', $next_offset, false );
-		// Reschedule safety-net: 30 s from now (JS normally beats this easily).
-		wp_clear_scheduled_hook( DC_GI_WATCH_CHECK_HOOK );
-		wp_schedule_single_event( time() + 30, DC_GI_WATCH_CHECK_HOOK );
 	}
 
 	wp_send_json_success( [
@@ -747,6 +754,10 @@ function dc_gi_ajax_poll_start(): void {
 		wp_send_json_error( 'Forbidden', 403 );
 	}
 	dc_gi_set_poll_active( true );
+	// Ensure the recurring cron is scheduled so polling continues without the browser.
+	if ( ! wp_next_scheduled( DC_GI_POLL_HOOK ) ) {
+		wp_schedule_event( time(), 'dc_gi_every1', DC_GI_POLL_HOOK );
+	}
 	wp_send_json_success( dc_gi_poll_status_data() );
 }
 
