@@ -1145,6 +1145,36 @@ function dc_gi_render_page(): void {
 	#dc-gi-wl-tbody tr{will-change:transform}
 	.dc-gi-wl-flash{animation:dcGiWlFlash .9s ease-out}
 	@keyframes dcGiWlFlash{0%{background:rgba(29,140,248,.22)}100%{background:transparent}}
+	/* ===================================================
+	   Responsive — constrain to viewport on small screens
+	   =================================================== */
+	.dc-gi-admin,.dc-gi-admin *,.dc-gi-admin *::before,.dc-gi-admin *::after{box-sizing:border-box}
+	@media screen and (max-width:782px){
+	.dc-gi-page-title{padding:14px 16px;font-size:17px}
+	.dc-gi-statusbar{overflow-x:auto;flex-wrap:nowrap;padding:0 12px}
+	.dc-gi-statusbar-chip{white-space:nowrap;flex-shrink:0}
+	.dc-gi-admin .nav-tab-wrapper{overflow-x:auto;flex-wrap:nowrap}
+	.dc-gi-admin .nav-tab{white-space:nowrap;padding:10px 12px!important;font-size:12px}
+	.dc-gi-panel{padding:18px 14px}
+	.dc-gi-grid-3{grid-template-columns:repeat(2,1fr)}
+	.dc-gi-live-stats{grid-template-columns:repeat(2,1fr)}
+	.dc-gi-info-grid{grid-template-columns:1fr}
+	.dc-gi-filter-list{columns:1}
+	.dc-gi-live-panel{max-width:100%!important}
+	.dc-gi-progress{overflow-x:auto;padding-bottom:6px}
+	.dc-gi-panel .widefat{display:block;overflow-x:auto}
+	}
+	@media screen and (max-width:600px){
+	.dc-gi-page-title{padding:11px 12px;font-size:15px;gap:8px}
+	.dc-gi-page-title .dashicons{font-size:22px;width:22px;height:22px}
+	.dc-gi-panel{padding:14px 10px;min-height:unset}
+	.dc-gi-grid-3{grid-template-columns:1fr}
+	.dc-gi-live-stats{gap:8px}
+	.dc-gi-stat-num{font-size:26px}
+	.dc-gi-live-stat-num{font-size:20px}
+	.dc-gi-step-header{flex-wrap:wrap}
+	.dc-gi-substep{flex-direction:column;gap:8px}
+	}
 	</style>
 	<div class="wrap dc-gi-admin">
 		<h1 class="dc-gi-page-title">
