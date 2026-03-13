@@ -245,42 +245,61 @@ function dc_gi_run_watchlist_check(): void {
 
 	$done_statuses = [ 'indexed', 'removed' ];
 
-	foreach ( $list as &$entry ) {
-		if ( in_array( $entry['status'], $done_statuses, true ) ) {
-			continue; // Already done.
+	// Coverage states that benefit from re-submission via the Indexing API.
+	// Google has seen the URL but has not indexed it yet — a re-submit signal
+	// can accelerate indexing for these states.
+	$resubmit_states = [
+		'Crawled - currently not indexed',
+		'Discovered - currently not indexed',
+		'URL is unknown to Google',
+		'', // API returns empty for completely unknown URLs.
+	];
+
+	// Build a prioritised processing order: sort pending entries by last_checked
+	// ascending so URLs that have never been checked (last_checked = 0) or
+	// were checked longest ago are inspected first.
+	$pending_keys = [];
+	foreach ( $list as $k => $entry ) {
+		if ( ! in_array( $entry['status'], $done_statuses, true ) ) {
+			$pending_keys[ $k ] = $entry['last_checked'];
 		}
+	}
+	asort( $pending_keys ); // Ascending: oldest/never-checked first.
+
+	foreach ( array_keys( $pending_keys ) as $k ) {
 		if ( $checked >= 20 ) {
 			break; // Quota-safe batch limit per run.
 		}
 
-		$result = DC_GI_JWT::inspect_url( $sa, $entry['url'], $site_url );
-		$entry['last_checked'] = time();
+		$result = DC_GI_JWT::inspect_url( $sa, $list[ $k ]['url'], $site_url );
+		$list[ $k ]['last_checked'] = time();
 		$checked++;
 		$updated = true;
 
 		if ( is_wp_error( $result ) ) {
-			$entry['coverage'] = 'error: ' . $result->get_error_message();
+			$list[ $k ]['coverage'] = 'error: ' . $result->get_error_message();
 			continue;
 		}
 
 		$coverage = $result['inspectionResult']['indexStatusResult']['coverageState'] ?? '';
-		$entry['coverage'] = $coverage;
+		$list[ $k ]['coverage'] = $coverage;
 
-		if ( 'removal_pending' === $entry['status'] ) {
+		if ( 'removal_pending' === $list[ $k ]['status'] ) {
 			// Waiting for de-indexing — mark removed when Google no longer knows the URL.
 			if ( '' === $coverage || 'URL is unknown to Google' === $coverage
 				|| 'Not found (404)' === $coverage || 'Soft 404' === $coverage ) {
-				$entry['status'] = 'removed';
+				$list[ $k ]['status'] = 'removed';
 			}
 		} elseif ( 'Submitted and indexed' === $coverage
 			|| 'Indexed, not submitted in sitemap' === $coverage ) {
-			$entry['status'] = 'indexed';
-		} elseif ( '' === $coverage || 'URL is unknown to Google' === $coverage ) {
-			// Google has never seen this URL — re-submit via Indexing API.
-			dc_gi_enqueue_url( $entry['url'], 'URL_UPDATED' );
+			$list[ $k ]['status'] = 'indexed';
+		} elseif ( in_array( $coverage, $resubmit_states, true ) ) {
+			// Google has not indexed the URL yet — re-submit via Indexing API to
+			// signal it is ready. This covers unknown, discovered, and crawled-but-
+			// not-indexed states, giving Google a stronger hint to prioritise it.
+			dc_gi_enqueue_url( $list[ $k ]['url'], 'URL_UPDATED' );
 		}
 	}
-	unset( $entry );
 
 	if ( $updated ) {
 		update_option( 'dc_gi_watchlist', $list, false );
