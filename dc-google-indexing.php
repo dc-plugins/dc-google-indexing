@@ -334,9 +334,8 @@ function dc_gi_run_poll_batch( bool $force = false ): string {
 		$candidates   = array_values( array_diff( $eligible, $poll_seen ) );
 
 		if ( empty( $candidates ) ) {
-			// Full cycle done — reset cursor and stop polling.
+			// Full cycle done — reset cursor and begin the next cycle automatically.
 			delete_option( 'dc_gi_poll_seen' );
-			dc_gi_set_poll_active( false );
 			set_transient( 'dc_gi_last_poll', array_merge(
 				(array) get_transient( 'dc_gi_last_poll' ),
 				[
@@ -390,7 +389,6 @@ function dc_gi_run_poll_batch( bool $force = false ): string {
 
 		if ( $cycle_done ) {
 			delete_option( 'dc_gi_poll_seen' );
-			dc_gi_set_poll_active( false );
 			$cycle_seen = $cycle_total;
 		} else {
 			update_option( 'dc_gi_poll_seen', $poll_seen, false );
@@ -550,6 +548,27 @@ function dc_gi_activate(): void {
 	}
 }
 
+add_action( 'init', 'dc_gi_maybe_reschedule_crons' );
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_maybe_reschedule_crons(): void {
+	// Fire immediately — queue processor runs every 5 minutes.
+	if ( ! wp_next_scheduled( DC_GI_CRON_HOOK ) ) {
+		wp_schedule_event( time(), 'dc_gi_every5', DC_GI_CRON_HOOK );
+	}
+	// Stagger by 5 min to avoid all crons firing at the same second on activation.
+	if ( ! wp_next_scheduled( DC_GI_WATCH_HOOK ) ) {
+		wp_schedule_event( time() + 300, 'dc_gi_sixhourly', DC_GI_WATCH_HOOK );
+	}
+	// Stagger by 1 min so polling cron does not collide with queue cron at t=0.
+	if ( ! wp_next_scheduled( DC_GI_POLL_HOOK ) ) {
+		wp_schedule_event( time() + 60, 'dc_gi_every1', DC_GI_POLL_HOOK );
+	}
+	// Restore the recurring watchlist check-one cron if it was lost but is still needed.
+	if ( get_option( 'dc_gi_watch_active', false ) && ! wp_next_scheduled( DC_GI_WATCH_CHECK_HOOK ) ) {
+		wp_schedule_event( time() + 60, 'dc_gi_every1', DC_GI_WATCH_CHECK_HOOK );
+	}
+}
+
 // =============================================================================
 // WATCH CHECK-ONE CRON — drives the live-check loop server-side when JS is gone
 // =============================================================================
@@ -587,9 +606,10 @@ function dc_gi_run_watch_check_one_cron(): void {
 	}
 
 	if ( $offset >= $total ) {
-		// All done — clean up.
+		// All done — clean up and remove the recurring cron.
 		delete_option( 'dc_gi_watch_active' );
 		delete_option( 'dc_gi_watch_offset' );
+		wp_clear_scheduled_hook( DC_GI_WATCH_CHECK_HOOK );
 		return;
 	}
 
@@ -629,13 +649,13 @@ function dc_gi_run_watch_check_one_cron(): void {
 	}
 
 	if ( $next >= $total ) {
-		// Cycle complete.
+		// Cycle complete — clean up and remove the recurring cron.
 		delete_option( 'dc_gi_watch_active' );
 		delete_option( 'dc_gi_watch_offset' );
+		wp_clear_scheduled_hook( DC_GI_WATCH_CHECK_HOOK );
 	} else {
-		// Advance cursor and schedule next single-event cron in 2 s.
+		// Advance cursor — recurring 1-minute cron will fire the next check automatically.
 		update_option( 'dc_gi_watch_offset', $next, false );
-		wp_schedule_single_event( time() + 2, DC_GI_WATCH_CHECK_HOOK );
 	}
 }
 
