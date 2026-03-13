@@ -66,6 +66,7 @@ add_action( 'wp_ajax_dc_gi_poll_trigger',  'dc_gi_ajax_poll_trigger' );
 add_action( 'wp_ajax_dc_gi_watch_check_one',    'dc_gi_ajax_watch_check_one' );
 add_action( 'wp_ajax_dc_gi_watch_stop',          'dc_gi_ajax_watch_stop' );
 add_action( 'wp_ajax_dc_gi_watch_resubmit_one',  'dc_gi_ajax_watch_resubmit_one' );
+add_action( 'wp_ajax_dc_gi_watch_status',        'dc_gi_ajax_watch_status' );
 add_action( 'admin_post_dc_gi_watch_fix_cron',   'dc_gi_handle_watch_fix_cron' );
 add_action( 'admin_post_dc_gi_watch_clr_indexed', 'dc_gi_handle_watch_clear_indexed' );
 add_action( 'admin_enqueue_scripts', 'dc_gi_enqueue_scripts' );
@@ -77,16 +78,22 @@ function dc_gi_enqueue_scripts( string $hook ): void {
 	wp_register_script( 'dc-gi-admin', false, [ 'jquery' ], DC_GI_VERSION, true );
 	wp_enqueue_script( 'dc-gi-admin' );
 	wp_localize_script( 'dc-gi-admin', 'dcGiPoll', [
-		'nonce'   => wp_create_nonce( 'dc_gi_ajax' ),
-		'ajaxurl' => admin_url( 'admin-ajax.php' ),
-		'active'  => (bool) get_option( 'dc_gi_poll_active', false ),
-		'i18n'    => [
-			'starting'  => __( 'Starting…', 'dc-google-indexing' ),
-			'stopping'  => __( 'Stopping…', 'dc-google-indexing' ),
-			'running'   => __( 'Running', 'dc-google-indexing' ),
-			'stopped'   => __( '○ Stopped', 'dc-google-indexing' ),
-			'done'      => __( '✅ Cycle complete', 'dc-google-indexing' ),
-			'errComms'  => __( 'Communication error — retrying…', 'dc-google-indexing' ),
+		'nonce'       => wp_create_nonce( 'dc_gi_ajax' ),
+		'ajaxurl'     => admin_url( 'admin-ajax.php' ),
+		'active'      => (bool) get_option( 'dc_gi_poll_active', false ),
+		'watchActive' => (bool) get_option( 'dc_gi_watch_active', false ),
+		'watchOffset' => (int) get_option( 'dc_gi_watch_offset', 0 ),
+		'watchTotal'  => count( (array) get_option( 'dc_gi_watchlist', [] ) ),
+		'i18n'        => [
+			'starting'      => __( 'Starting…', 'dc-google-indexing' ),
+			'stopping'      => __( 'Stopping…', 'dc-google-indexing' ),
+			'running'       => __( 'Running', 'dc-google-indexing' ),
+			'stopped'       => __( '○ Stopped', 'dc-google-indexing' ),
+			'done'          => __( '✅ Cycle complete', 'dc-google-indexing' ),
+			'errComms'      => __( 'Communication error — retrying…', 'dc-google-indexing' ),
+			'watchRunning'  => __( '● Running in background', 'dc-google-indexing' ),
+			'watchStopped'  => __( '○ Stopped', 'dc-google-indexing' ),
+			'watchDone'     => __( '✅ Check complete', 'dc-google-indexing' ),
 		],
 	] );
 	wp_add_inline_script( 'dc-gi-admin', dc_gi_poll_js() );
@@ -283,73 +290,94 @@ function dc_gi_watch_check_js(): string {
 		var wcStopped = true;
 		var wcXhr     = null;
 
-		// Format a unix timestamp (seconds) as 'YYYY-MM-DD HH:MM'.
+		// Format the current time as 'YYYY-MM-DD HH:MM'.
 		function fmtNow() {
 			var n = new Date();
 			var p = function(v){ return String(v).padStart(2,'0'); };
 			return n.getFullYear()+'-'+p(n.getMonth()+1)+'-'+p(n.getDate())+' '+p(n.getHours())+':'+p(n.getMinutes());
 		}
 
-		// FLIP: move $row to top of its tbody with a spring-like CSS transition.
+		// ── Badge helpers ──────────────────────────────────────────────────────
+
+		function setBadgeRunning() {
+			var $b = $('#dc-gi-watch-badge');
+			$b.attr('class', 'dc-gi-poll-badge running');
+			$b.html('<span class="dc-gi-spinner"></span><span class="dc-gi-badge-text">' + dcGiPoll.i18n.watchRunning + '</span>');
+			$('#dc-gi-watch-check-btn').prop('disabled', true);
+			$('#dc-gi-watch-stop-btn2').prop('disabled', false);
+			$('#dc-gi-watch-stop-btn').prop('disabled', false);
+			$('#dc-gi-watch-progress').show();
+		}
+
+		function setBadgeStopped() {
+			var $b = $('#dc-gi-watch-badge');
+			$b.attr('class', 'dc-gi-poll-badge stopped');
+			$b.html('<span class="dc-gi-badge-text">' + dcGiPoll.i18n.watchStopped + '</span>');
+			$('#dc-gi-watch-check-btn').prop('disabled', false);
+			$('#dc-gi-watch-stop-btn2').prop('disabled', true);
+			$('#dc-gi-watch-stop-btn').prop('disabled', true);
+		}
+
+		function setBadgeDone() {
+			var $b = $('#dc-gi-watch-badge');
+			$b.attr('class', 'dc-gi-poll-badge done');
+			$b.html('<span class="dc-gi-badge-text">' + dcGiPoll.i18n.watchDone + '</span>');
+			$('#dc-gi-watch-check-btn').prop('disabled', false);
+			$('#dc-gi-watch-stop-btn2').prop('disabled', true);
+			$('#dc-gi-watch-stop-btn').prop('disabled', true);
+		}
+
+		// ── FLIP animation ─────────────────────────────────────────────────────
+
 		function flipToTop($row, newStatus, newCoverage) {
 			var tbody = document.getElementById('dc-gi-wl-tbody');
 			if (!tbody) return;
 
-			// FIRST — record current position.
 			var first = $row[0].getBoundingClientRect().top;
-
-			// LAST — move to top of list instantly.
 			tbody.insertBefore($row[0], tbody.firstChild);
-
-			// Compute delta: how far we visually displaced the row.
 			var last  = $row[0].getBoundingClientRect().top;
 			var delta = first - last;
 
-			// INVERT — offset back to old visual position with no transition.
 			$row[0].style.transition = 'none';
 			$row[0].style.transform  = 'translateY(' + delta + 'px)';
-
-			// Force reflow so the browser registers the starting position.
 			$row[0].offsetHeight; // eslint-disable-line no-unused-expressions
-
-			// PLAY — animate to natural (zero) position.
 			$row[0].style.transition = 'transform 420ms cubic-bezier(0.34,1.56,0.64,1)';
 			$row[0].style.transform  = 'translateY(0)';
-
-			// Clean up transform after animation so layout stays normal.
 			setTimeout(function(){ $row[0].style.transition = ''; $row[0].style.transform = ''; }, 450);
 
-			// Update status badge (2nd td).
 			var label = newStatus.charAt(0).toUpperCase() + newStatus.slice(1);
 			$row.find('td').eq(1).html('<span class="dc-gi-wl-badge ' + newStatus + '">' + label + '</span>');
-
-			// Update coverage (3rd td).
 			$row.find('td').eq(2).text(newCoverage || '—');
-
-			// Update last-checked (5th td).
 			$row.find('td').eq(4).text(fmtNow());
-
-			// Flash highlight.
 			$row.removeClass('dc-gi-wl-flash');
-			$row[0].offsetHeight;
+			$row[0].offsetHeight; // eslint-disable-line no-unused-expressions
 			$row.addClass('dc-gi-wl-flash');
 		}
 
-		function wcStart() {
+		// Remove auto-deleted rows from the table without reloading.
+		function removeRow(url) {
+			var $row = $('[data-wl-url="' + url.replace(/"/g,'&quot;') + '"]');
+			if ($row.length) {
+				$row.css('transition', 'opacity 0.4s').css('opacity', '0');
+				setTimeout(function(){ $row.remove(); }, 420);
+			}
+		}
+
+		// ── Core check loop ────────────────────────────────────────────────────
+
+		function wcStart(startOffset) {
 			wcStopped = false;
-			$('#dc-gi-watch-check-btn').prop('disabled', true);
-			$('#dc-gi-watch-progress').show();
-			$('#dc-gi-wcp-label').text('Checking…');
+			setBadgeRunning();
+			$('#dc-gi-wcp-label').text('Checking\u2026');
 			$('#dc-gi-wcp-bar').css('width','0%').css('background','linear-gradient(90deg,#1d8cf8,#00f2c3)');
-			wcCheckOne(0);
+			wcCheckOne(startOffset || 0);
 		}
 
 		function wcStop() {
 			wcStopped = true;
 			if (wcXhr) { wcXhr.abort(); wcXhr = null; }
-			$('#dc-gi-watch-check-btn').prop('disabled', false);
+			setBadgeStopped();
 			$('#dc-gi-wcp-label').text('Stopped.');
-			// Tell server to clear the active flag + cron safety-net.
 			$.post(dcGiPoll.ajaxurl, { action: 'dc_gi_watch_stop', nonce: dcGiPoll.nonce });
 		}
 
@@ -364,7 +392,7 @@ function dc_gi_watch_check_js(): string {
 					if (wcStopped) return;
 					if (!r.success) {
 						$('#dc-gi-wcp-label').text('Error: ' + JSON.stringify(r));
-						$('#dc-gi-watch-check-btn').prop('disabled', false);
+						setBadgeStopped();
 						return;
 					}
 					var d     = r.data;
@@ -372,23 +400,23 @@ function dc_gi_watch_check_js(): string {
 					var pct   = Math.round(d.checked / total * 100);
 					$('#dc-gi-wcp-count').text(d.checked + ' / ' + total + ' (' + pct + '%)');
 					$('#dc-gi-wcp-bar').css('width', pct + '%');
-					if (d.url) $('#dc-gi-wcp-url').text(d.url + ' → ' + (d.coverage || d.status));
-					// Live-update the header queue count.
+					if (d.url) $('#dc-gi-wcp-url').text(d.url + ' \u2192 ' + (d.coverage || d.status));
 					if (typeof d.queue_count !== 'undefined') {
 						$('#dc-gi-header-queue').text(d.queue_count);
-						$('#dc-gi-queue-count').text(d.queue_count); // polling tab counter too
+						$('#dc-gi-queue-count').text(d.queue_count);
 					}
-
-					// FLIP the processed row to the top of the table.
 					if (d.url) {
-						var $row = $('[data-wl-url="' + d.url.replace(/"/g,'&quot;') + '"]');
-						if ($row.length) flipToTop($row, d.status, d.coverage);
+						if (d.auto_removed) {
+							removeRow(d.url);
+						} else {
+							var $row = $('[data-wl-url="' + d.url.replace(/"/g,'&quot;') + '"]');
+							if ($row.length) flipToTop($row, d.status, d.coverage);
+						}
 					}
-
 					if (d.done) {
-						$('#dc-gi-wcp-label').text('✅ Done — ' + d.checked + ' URLs checked.');
+						$('#dc-gi-wcp-label').text('\u2705 Done \u2014 ' + d.checked + ' URLs checked.');
 						$('#dc-gi-wcp-bar').css('background','#00f2c3');
-						$('#dc-gi-watch-check-btn').prop('disabled', false);
+						setBadgeDone();
 					} else {
 						wcCheckOne(d.next);
 					}
@@ -396,36 +424,36 @@ function dc_gi_watch_check_js(): string {
 				.fail(function(xhr) {
 					if (xhr.statusText === 'abort') return;
 					if (wcStopped) return;
-					// Retry same offset after 2s on transient errors.
 					setTimeout(function(){ wcCheckOne(offset); }, 2000);
 				});
 		}
 
-		$('#dc-gi-watch-check-btn').on('click', wcStart);
-		$('#dc-gi-watch-stop-btn').on('click', wcStop);
+		// ── Button bindings ────────────────────────────────────────────────────
+
+		$('#dc-gi-watch-check-btn').on('click', function(){ wcStart(0); });
+		$('#dc-gi-watch-stop-btn, #dc-gi-watch-stop-btn2').on('click', wcStop);
 
 		// Per-row re-submit button.
 		$(document).on('click', '.dc-gi-watch-resubmit-btn', function() {
 			var $btn = $(this);
 			var url  = $btn.data('url');
 			if (!url) return;
-			$btn.prop('disabled', true).text('…');
+			$btn.prop('disabled', true).text('\u2026');
 			$.post(dcGiPoll.ajaxurl, {
 				action: 'dc_gi_watch_resubmit_one',
 				nonce:  dcGiPoll.nonce,
 				url:    url
 			})
 			.done(function(r) {
-				$btn.prop('disabled', false).text('↻');
+				$btn.prop('disabled', false).text('\u21bb');
 				if (r.success) {
-					// Update status badge to pending and clear coverage.
 					var $row = $('[data-wl-url]').filter(function() { return $(this).attr('data-wl-url') === url; });
 					if ($row.length) {
 						$row.find('td').eq(1).html('<span class="dc-gi-wl-badge pending">Pending</span>');
-						$row.find('td').eq(2).text('—');
+						$row.find('td').eq(2).text('\u2014');
 						$row.find('td').eq(3).text(fmtNow());
 						$row.removeClass('dc-gi-wl-flash');
-						$row[0].offsetHeight; // Force reflow to restart flash animation.
+						$row[0].offsetHeight; // eslint-disable-line no-unused-expressions
 						$row.addClass('dc-gi-wl-flash');
 					}
 					if (typeof r.data.queue_count !== 'undefined') {
@@ -435,9 +463,21 @@ function dc_gi_watch_check_js(): string {
 				}
 			})
 			.fail(function() {
-				$btn.prop('disabled', false).text('↻');
+				$btn.prop('disabled', false).text('\u21bb');
 			});
 		});
+
+		// ── Page-load: detect if cron is already running ───────────────────────
+
+		if (dcGiPoll.watchActive) {
+			// Cron started the check before this page loaded — show Running state
+			// and resume the AJAX loop from the current offset so the UI stays live.
+			setBadgeRunning();
+			$('#dc-gi-wcp-label').text('Resuming check from background\u2026');
+			wcStart(dcGiPoll.watchOffset || 0);
+		} else {
+			setBadgeStopped();
+		}
 	});
 }(jQuery));
 JS;
@@ -726,11 +766,14 @@ function dc_gi_ajax_watch_check_one(): void {
 		wp_send_json_success( [ 'done' => true, 'checked' => $offset, 'total' => $total, 'queue_count' => count( (array) get_option( 'dc_gi_queue', [] ) ) ] );
 	}
 
-	$key   = $keys[ $offset ];
-	$entry = &$list[ $key ];
+	$key       = $keys[ $offset ];
+	$entry     = &$list[ $key ];
+	$entry_url = $entry['url'];
 
-	$result            = DC_GI_JWT::inspect_url( $sa, $entry['url'], $site_url );
+	$result            = DC_GI_JWT::inspect_url( $sa, $entry_url, $site_url );
 	$entry['last_checked'] = time();
+
+	$auto_removed = false;
 
 	if ( is_wp_error( $result ) ) {
 		$entry['coverage'] = 'error: ' . $result->get_error_message();
@@ -756,21 +799,43 @@ function dc_gi_ajax_watch_check_one(): void {
 			|| 'Indexed, not submitted in sitemap' === $coverage ) {
 			$entry['status'] = 'indexed';
 		} elseif ( in_array( $coverage, $resubmit_states, true ) ) {
-			// Google has not indexed the URL yet — re-submit via Indexing API to
-			// signal it is ready (covers unknown, discovered, and crawled states).
-			dc_gi_enqueue_url( $entry['url'], 'URL_UPDATED' );
-			$entry['coverage'] = $coverage ?: 'URL is unknown to Google';
-			$entry['coverage'] .= ' (re-queued for submission)';
-			$entry['status']   = 'pending';
+			// Before re-submitting, verify the URL is still in the sitemap.
+			// If it has been removed, auto-delete from watchlist and log.
+			$sitemap_urls = dc_gi_get_sitemap_urls_cached();
+			if ( ! empty( $sitemap_urls ) && ! in_array( $entry_url, $sitemap_urls, true ) ) {
+				$auto_removed = true;
+				unset( $entry );
+				dc_gi_log_info(
+					$entry_url,
+					'SITEMAP_REMOVED',
+					__( 'URL no longer in sitemap — auto-removed from watchlist', 'dc-google-indexing' )
+				);
+				unset( $list[ $key ] );
+				$list  = array_values( $list );
+				$keys  = array_keys( $list );
+				$total = count( $keys );
+				update_option( 'dc_gi_watchlist', $list, false );
+			} else {
+				// Google has not indexed the URL yet — re-submit via Indexing API to
+				// signal it is ready (covers unknown, discovered, and crawled states).
+				dc_gi_enqueue_url( $entry_url, 'URL_UPDATED' );
+				$entry['coverage'] = $coverage ?: 'URL is unknown to Google';
+				$entry['coverage'] .= ' (re-queued for submission)';
+				$entry['status']   = 'pending';
+			}
 		} else {
 			$entry['status'] = 'pending';
 		}
 	}
-	unset( $entry );
-	update_option( 'dc_gi_watchlist', $list, false );
+
+	if ( ! $auto_removed ) {
+		unset( $entry );
+		update_option( 'dc_gi_watchlist', $list, false );
+	}
 
 	$done_statuses = [ 'indexed', 'removed' ];
-	$next_offset   = $offset + 1;
+	// When auto-removed, stay at the same offset (the entry at offset is now the next one).
+	$next_offset = $auto_removed ? $offset : $offset + 1;
 	// Skip any trailing already-done entries for the next call.
 	while ( $next_offset < $total && in_array( $list[ $keys[ $next_offset ] ]['status'] ?? '', $done_statuses, true ) ) {
 		$next_offset++;
@@ -789,14 +854,15 @@ function dc_gi_ajax_watch_check_one(): void {
 	}
 
 	wp_send_json_success( [
-		'done'        => $done,
-		'checked'     => $offset + 1,
-		'total'       => $total,
-		'next'        => $next_offset,
-		'url'         => $list[ $keys[ $offset ] ]['url'],
-		'status'      => $list[ $keys[ $offset ] ]['status'],
-		'coverage'    => $list[ $keys[ $offset ] ]['coverage'] ?? '',
-		'queue_count' => $queue_count,
+		'done'         => $done,
+		'checked'      => $auto_removed ? $offset : $offset + 1,
+		'total'        => $total,
+		'next'         => $next_offset,
+		'url'          => $entry_url,
+		'status'       => $auto_removed ? 'auto_removed' : ( $list[ $keys[ $offset ] ]['status'] ?? '' ),
+		'coverage'     => $auto_removed ? '' : ( $list[ $keys[ $offset ] ]['coverage'] ?? '' ),
+		'auto_removed' => $auto_removed,
+		'queue_count'  => $queue_count,
 	] );
 }
 
@@ -810,6 +876,22 @@ function dc_gi_ajax_watch_stop(): void {
 	delete_option( 'dc_gi_watch_offset' );
 	wp_clear_scheduled_hook( DC_GI_WATCH_CHECK_HOOK );
 	wp_send_json_success();
+}
+
+/**
+ * AJAX: Return the current watchlist running state so JS can show the badge.
+ */
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_ajax_watch_status(): void {
+	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_send_json_error( 'Forbidden', 403 );
+	}
+	wp_send_json_success( [
+		'active' => (bool) get_option( 'dc_gi_watch_active', false ),
+		'offset' => (int) get_option( 'dc_gi_watch_offset', 0 ),
+		'total'  => count( (array) get_option( 'dc_gi_watchlist', [] ) ),
+	] );
 }
 
 /**
@@ -1971,7 +2053,12 @@ function dc_gi_render_page(): void {
 		?>
 
 		<div style="display:flex;gap:12px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
+			<!-- Running/Stopped badge — updated live by JS -->
+			<span id="dc-gi-watch-badge" class="dc-gi-poll-badge stopped" style="margin-right:4px">
+				<span class="dc-gi-badge-text"><?php esc_html_e( '○ Stopped', 'dc-google-indexing' ); ?></span>
+			</span>
 			<button id="dc-gi-watch-check-btn" class="button dc-gi-btn-start"><?php esc_html_e( '🔄 Check Now', 'dc-google-indexing' ); ?></button>
+			<button id="dc-gi-watch-stop-btn2" class="button dc-gi-btn-stop" disabled><?php esc_html_e( '■ Stop', 'dc-google-indexing' ); ?></button>
 			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"
 				onsubmit="return confirm('<?php esc_attr_e( 'Clear the entire watchlist?', 'dc-google-indexing' ); ?>')">
 				<?php wp_nonce_field( 'dc_gi_watch_clr' ); ?>
@@ -2019,7 +2106,7 @@ function dc_gi_render_page(): void {
 			<div class="dc-gi-live-panel" style="padding:18px 22px">
 				<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
 					<span id="dc-gi-wcp-label" style="font-size:13px;font-weight:600;color:#c8d0e0"><?php esc_html_e( 'Checking…', 'dc-google-indexing' ); ?></span>
-					<button id="dc-gi-watch-stop-btn" class="button dc-gi-btn-stop" style="font-size:11px;padding:3px 12px"><?php esc_html_e( '■ Stop', 'dc-google-indexing' ); ?></button>
+					<button id="dc-gi-watch-stop-btn" class="button dc-gi-btn-stop" style="font-size:11px;padding:3px 12px" disabled><?php esc_html_e( '■ Stop', 'dc-google-indexing' ); ?></button>
 				</div>
 				<div style="display:flex;justify-content:space-between;font-size:12px;color:#7a8499;margin-bottom:4px">
 					<span><?php esc_html_e( 'Progress', 'dc-google-indexing' ); ?></span>
@@ -2298,6 +2385,8 @@ function dc_gi_render_page(): void {
 					<td>
 						<?php if ( 'ok' === $entry['status'] ) : ?>
 							<span style="color:#46b450;font-weight:600">&#10003; OK</span>
+						<?php elseif ( 'info' === $entry['status'] ) : ?>
+							<span style="color:#1d8cf8;font-weight:600">&#x2139; Info</span>
 						<?php else : ?>
 							<span style="color:#dc3232;font-weight:600">&#10007; Error</span>
 						<?php endif; ?>

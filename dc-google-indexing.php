@@ -66,9 +66,6 @@ function dc_gi_cron_schedules( array $schedules ): array {
 add_action( 'transition_post_status', 'dc_gi_on_status_change', 10, 3 );
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
 function dc_gi_on_status_change( string $new_status, string $old_status, WP_Post $post ): void {
-	if ( 'publish' !== $new_status ) {
-		return;
-	}
 	$settings = dc_gi_get_settings();
 	if ( empty( $settings['auto_submit'] ) ) {
 		return;
@@ -77,10 +74,99 @@ function dc_gi_on_status_change( string $new_status, string $old_status, WP_Post
 	if ( ! in_array( $post->post_type, $post_types, true ) ) {
 		return;
 	}
-	$url = get_permalink( $post->ID );
-	if ( $url ) {
-		dc_gi_enqueue_url( $url, 'URL_UPDATED' );
+
+	if ( 'publish' === $new_status ) {
+		// Published or re-published — notify Google to index it.
+		$url = get_permalink( $post->ID );
+		if ( $url ) {
+			dc_gi_enqueue_url( $url, 'URL_UPDATED' );
+		}
+		return;
 	}
+
+	// Transitioning away from publish to draft / private / pending — remove from index.
+	if ( 'publish' === $old_status && in_array( $new_status, [ 'draft', 'private', 'pending' ], true ) ) {
+		// Build the public permalink from the post data: at this point the post
+		// is already saved with the new status, so get_permalink() returns '?p=ID'
+		// for drafts. Clone the object with 'publish' status and filter='sample'
+		// so WordPress computes the real URL from the post slug.
+		$pub = clone $post;
+		// phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited
+		$pub->post_status = 'publish'; // Tells get_permalink() to use the real structure.
+		$pub->filter      = 'sample';  // Tells get_permalink() to use the object as-is.
+		$url = get_permalink( $pub );
+		if ( $url ) {
+			dc_gi_enqueue_url( $url, 'URL_DELETED' );
+		}
+	}
+}
+
+// Queue URL_DELETED when a published post is trashed.
+// Hooks into wp_trash_post instead of transition_post_status because the
+// post slug gets an "__trashed" suffix appended during the update — this
+// hook fires before that mangling, so get_permalink() still returns the
+// real public URL.
+add_action( 'wp_trash_post', 'dc_gi_on_post_trashed', 10, 2 );
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_on_post_trashed( int $post_id, string $previous_status ): void {
+	if ( 'publish' !== $previous_status ) {
+		return;
+	}
+	$settings = dc_gi_get_settings();
+	if ( empty( $settings['auto_submit'] ) ) {
+		return;
+	}
+	$post = get_post( $post_id );
+	if ( ! $post ) {
+		return;
+	}
+	$post_types = $settings['post_types'] ?? [ 'post', 'page' ];
+	if ( ! in_array( $post->post_type, $post_types, true ) ) {
+		return;
+	}
+	// Post is still published in the DB at this point — permalink is correct.
+	$url = get_permalink( $post_id );
+	if ( $url ) {
+		dc_gi_enqueue_url( $url, 'URL_DELETED' );
+	}
+}
+
+// Queue URL_DELETED when a published post has a password added to it.
+// The transition_post_status hook fires first (adding URL_UPDATED); this
+// hook fires afterwards and replaces that entry with URL_DELETED so the
+// correct notification is sent to Google.
+add_action( 'post_updated', 'dc_gi_on_post_password_set', 10, 3 );
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_on_post_password_set( int $post_id, WP_Post $post_after, WP_Post $post_before ): void {
+	if ( 'publish' !== $post_before->post_status || 'publish' !== $post_after->post_status ) {
+		return;
+	}
+	if ( ! empty( $post_before->post_password ) || empty( $post_after->post_password ) ) {
+		// Either already had a password, or no password added — nothing to do.
+		return;
+	}
+	$settings = dc_gi_get_settings();
+	if ( empty( $settings['auto_submit'] ) ) {
+		return;
+	}
+	$post_types = $settings['post_types'] ?? [ 'post', 'page' ];
+	if ( ! in_array( $post_after->post_type, $post_types, true ) ) {
+		return;
+	}
+	$url = get_permalink( $post_id );
+	if ( ! $url ) {
+		return;
+	}
+	// Remove any URL_UPDATED entry queued by transition_post_status and replace
+	// it with URL_DELETED — a password-protected post should be de-indexed.
+	$queue   = get_option( 'dc_gi_queue', [] );
+	$queue   = array_values( array_filter( $queue, fn( $item ) => $item['url'] !== $url ) );
+	$queue[] = [
+		'url'   => esc_url_raw( $url ),
+		'type'  => 'URL_DELETED',
+		'added' => time(),
+	];
+	update_option( 'dc_gi_queue', $queue, false );
 }
 
 // =============================================================================
@@ -169,6 +255,24 @@ function dc_gi_add_log( string $url, string $type, $result ): void {
 	}
 }
 
+/**
+ * Add a plain informational entry to the log without triggering watchlist side effects.
+ * Use this for automatic actions (sitemap removal, 404 detection) that should be
+ * visible in the log but must not create new watchlist entries.
+ */
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_log_info( string $url, string $type, string $detail ): void {
+	$log = get_option( 'dc_gi_log', [] );
+	array_unshift( $log, [
+		'url'    => $url,
+		'type'   => $type,
+		'time'   => time(),
+		'status' => 'info',
+		'detail' => $detail,
+	] );
+	update_option( 'dc_gi_log', array_slice( $log, 0, 100 ), false );
+}
+
 // =============================================================================
 // WATCHLIST — track submitted URLs until Google indexes them
 // =============================================================================
@@ -223,6 +327,26 @@ function dc_gi_watchlist_get(): array {
 }
 
 /**
+ * Return sitemap URLs, caching the result for 5 minutes to avoid repeated
+ * network fetches during a single watchlist-check or poll-batch run.
+ *
+ * @return array Empty array when the sitemap is unavailable.
+ */
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_get_sitemap_urls_cached(): array {
+	$cached = get_transient( 'dc_gi_sitemap_urls_cache' );
+	if ( false !== $cached ) {
+		return (array) $cached;
+	}
+	$urls = DC_GI_Sitemap::get_urls( 2000 );
+	if ( is_wp_error( $urls ) ) {
+		return [];
+	}
+	set_transient( 'dc_gi_sitemap_urls_cache', $urls, 5 * MINUTE_IN_SECONDS );
+	return $urls;
+}
+
+/**
  * Background cron: inspect pending watchlist URLs and mark indexed ones.
  * Checks up to 20 pending URLs per run to stay well within quota.
  */
@@ -238,10 +362,11 @@ function dc_gi_run_watchlist_check(): void {
 		return;
 	}
 
-	$site_url = trailingslashit( get_home_url() );
-	$list     = get_option( 'dc_gi_watchlist', [] );
-	$updated  = false;
-	$checked  = 0;
+	$site_url      = trailingslashit( get_home_url() );
+	$list          = get_option( 'dc_gi_watchlist', [] );
+	$updated       = false;
+	$checked       = 0;
+	$sitemap_urls  = null; // Lazy-load on first resubmit candidate.
 
 	$done_statuses = [ 'indexed', 'removed' ];
 
@@ -294,6 +419,21 @@ function dc_gi_run_watchlist_check(): void {
 			|| 'Indexed, not submitted in sitemap' === $coverage ) {
 			$list[ $k ]['status'] = 'indexed';
 		} elseif ( in_array( $coverage, $resubmit_states, true ) ) {
+			// Before re-submitting, verify the URL is still in the sitemap.
+			// If it has been removed from the site, auto-delete it from the
+			// watchlist and add an informational log entry instead.
+			if ( null === $sitemap_urls ) {
+				$sitemap_urls = dc_gi_get_sitemap_urls_cached();
+			}
+			if ( ! empty( $sitemap_urls ) && ! in_array( $list[ $k ]['url'], $sitemap_urls, true ) ) {
+				dc_gi_log_info(
+					$list[ $k ]['url'],
+					'SITEMAP_REMOVED',
+					__( 'URL no longer in sitemap — auto-removed from watchlist', 'dc-google-indexing' )
+				);
+				unset( $list[ $k ] );
+				continue;
+			}
 			// Google has not indexed the URL yet — re-submit via Indexing API to
 			// signal it is ready. This covers unknown, discovered, and crawled-but-
 			// not-indexed states, giving Google a stronger hint to prioritise it.
@@ -302,7 +442,7 @@ function dc_gi_run_watchlist_check(): void {
 	}
 
 	if ( $updated ) {
-		update_option( 'dc_gi_watchlist', $list, false );
+		update_option( 'dc_gi_watchlist', array_values( $list ), false );
 	}
 }
 
@@ -387,6 +527,16 @@ function dc_gi_run_poll_batch( bool $force = false ): string {
 			if ( in_array( $coverage, $submittable, true ) ) {
 				dc_gi_enqueue_url( $url, 'URL_UPDATED' );
 				$queued++;
+			} elseif ( in_array( $coverage, [ 'Not found (404)', 'Soft 404' ], true ) ) {
+				// URL is in the sitemap but returns 404 — log it as an informational
+				// note so the site owner can investigate and fix the sitemap.
+				$skipped++;
+				dc_gi_log_info(
+					$url,
+					'POLL_404',
+					/* translators: %s: Google coverage state (e.g. 'Not found (404)') */
+					sprintf( __( '%s during polling — skipped submission', 'dc-google-indexing' ), $coverage )
+				);
 			} else {
 				$skipped++;
 			}
@@ -644,6 +794,14 @@ function dc_gi_run_watch_check_one_cron(): void {
 	} else {
 		$coverage          = $result['inspectionResult']['indexStatusResult']['coverageState'] ?? '';
 		$entry['coverage'] = $coverage;
+
+		$resubmit_states = [
+			'Crawled - currently not indexed',
+			'Discovered - currently not indexed',
+			'URL is unknown to Google',
+			'',
+		];
+
 		if ( 'removal_pending' === $entry['status'] ) {
 			if ( '' === $coverage || 'URL is unknown to Google' === $coverage
 				|| 'Not found (404)' === $coverage || 'Soft 404' === $coverage ) {
@@ -651,9 +809,39 @@ function dc_gi_run_watch_check_one_cron(): void {
 			}
 		} elseif ( 'Submitted and indexed' === $coverage || 'Indexed, not submitted in sitemap' === $coverage ) {
 			$entry['status'] = 'indexed';
-		} elseif ( '' === $coverage || 'URL is unknown to Google' === $coverage ) {
+		} elseif ( in_array( $coverage, $resubmit_states, true ) ) {
+			// Before re-submitting, check that the URL is still in the sitemap.
+			$sitemap_urls = dc_gi_get_sitemap_urls_cached();
+			if ( ! empty( $sitemap_urls ) && ! in_array( $entry['url'], $sitemap_urls, true ) ) {
+				$entry_url = $entry['url'];
+				unset( $entry );
+				dc_gi_log_info(
+					$entry_url,
+					'SITEMAP_REMOVED',
+					__( 'URL no longer in sitemap — auto-removed from watchlist', 'dc-google-indexing' )
+				);
+				unset( $list[ $key ] );
+				$list = array_values( $list );
+				update_option( 'dc_gi_watchlist', $list, false );
+				// Recalculate keys/total after removal and continue from same position.
+				$keys  = array_keys( $list );
+				$total = count( $keys );
+				$next  = $offset; // Stay at same position since we removed an entry.
+				while ( $next < $total && in_array( $list[ $keys[ $next ] ]['status'] ?? '', $done_statuses, true ) ) {
+					$next++;
+				}
+				if ( $next >= $total ) {
+					delete_option( 'dc_gi_watch_active' );
+					delete_option( 'dc_gi_watch_offset' );
+					wp_clear_scheduled_hook( DC_GI_WATCH_CHECK_HOOK );
+				} else {
+					update_option( 'dc_gi_watch_offset', $next, false );
+				}
+				return;
+			}
 			dc_gi_enqueue_url( $entry['url'], 'URL_UPDATED' );
-			$entry['coverage'] = 'URL is unknown to Google (re-queued for submission)';
+			$entry['coverage'] = $coverage ?: 'URL is unknown to Google';
+			$entry['coverage'] .= ' (re-queued for submission)';
 			$entry['status']   = 'pending';
 		} else {
 			$entry['status'] = 'pending';
