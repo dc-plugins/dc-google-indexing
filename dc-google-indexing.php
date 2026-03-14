@@ -66,16 +66,16 @@ function dc_gi_cron_schedules( array $schedules ): array {
 add_action( 'transition_post_status', 'dc_gi_on_status_change', 10, 3 );
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
 function dc_gi_on_status_change( string $new_status, string $old_status, WP_Post $post ): void {
-	$settings = dc_gi_get_settings();
-	if ( empty( $settings['auto_submit'] ) ) {
-		return;
-	}
+	$settings   = dc_gi_get_settings();
 	$post_types = $settings['post_types'] ?? [ 'post', 'page' ];
 	if ( ! in_array( $post->post_type, $post_types, true ) ) {
 		return;
 	}
 
 	if ( 'publish' === $new_status ) {
+		if ( empty( $settings['auto_submit'] ) ) {
+			return;
+		}
 		// Published or re-published — notify Google to index it.
 		$url = get_permalink( $post->ID );
 		if ( $url ) {
@@ -85,7 +85,12 @@ function dc_gi_on_status_change( string $new_status, string $old_status, WP_Post
 	}
 
 	// Transitioning away from publish to draft / private / pending — remove from index.
+	// Controlled by the separate auto_delete toggle (defaults to 1 for backward compat).
 	if ( 'publish' === $old_status && in_array( $new_status, [ 'draft', 'private', 'pending' ], true ) ) {
+		$auto_delete = isset( $settings['auto_delete'] ) ? (bool) $settings['auto_delete'] : true;
+		if ( ! $auto_delete ) {
+			return;
+		}
 		// Build the public permalink from the post data: at this point the post
 		// is already saved with the new status, so get_permalink() returns '?p=ID'
 		// for drafts. Clone the object with 'publish' status and filter='sample'
@@ -113,7 +118,9 @@ function dc_gi_on_post_trashed( int $post_id, string $previous_status ): void {
 		return;
 	}
 	$settings = dc_gi_get_settings();
-	if ( empty( $settings['auto_submit'] ) ) {
+	// auto_delete defaults to 1 for backward compatibility.
+	$auto_delete = isset( $settings['auto_delete'] ) ? (bool) $settings['auto_delete'] : true;
+	if ( ! $auto_delete ) {
 		return;
 	}
 	$post = get_post( $post_id );
@@ -146,7 +153,9 @@ function dc_gi_on_post_password_set( int $post_id, WP_Post $post_after, WP_Post 
 		return;
 	}
 	$settings = dc_gi_get_settings();
-	if ( empty( $settings['auto_submit'] ) ) {
+	// auto_delete defaults to 1 for backward compatibility.
+	$auto_delete = isset( $settings['auto_delete'] ) ? (bool) $settings['auto_delete'] : true;
+	if ( ! $auto_delete ) {
 		return;
 	}
 	$post_types = $settings['post_types'] ?? [ 'post', 'page' ];
@@ -214,12 +223,15 @@ function dc_gi_process_queue(): void {
 		return;
 	}
 
-	$can_process = min( 10, $limit - $used );
+	$can_process = min( 100, $limit - $used );
 	$batch       = array_splice( $queue, 0, $can_process );
 	update_option( 'dc_gi_queue', $queue, false );
 
+	// Submit all items in a single batch request to reduce HTTP overhead.
+	$results = DC_GI_JWT::submit_batch( $sa, $batch );
+
 	foreach ( $batch as $item ) {
-		$result = DC_GI_JWT::submit_url( $sa, $item['url'], $item['type'] );
+		$result = $results[ $item['url'] ] ?? new WP_Error( 'dc_gi_no_response', __( 'No response received.', 'dc-google-indexing' ) );
 		dc_gi_add_log( $item['url'], $item['type'], $result );
 		if ( ! is_wp_error( $result ) ) {
 			set_transient( $quota_key, ++$used, DAY_IN_SECONDS );
@@ -362,6 +374,10 @@ function dc_gi_run_watchlist_check(): void {
 		return;
 	}
 
+	// When the daily Indexing API quota is exhausted, skip re-submissions but
+	// still update coverage states so the watchlist stays current.
+	$quota_ok = ! dc_gi_is_quota_exhausted();
+
 	$site_url      = trailingslashit( get_home_url() );
 	$list          = get_option( 'dc_gi_watchlist', [] );
 	$updated       = false;
@@ -434,10 +450,13 @@ function dc_gi_run_watchlist_check(): void {
 				unset( $list[ $k ] );
 				continue;
 			}
-			// Google has not indexed the URL yet — re-submit via Indexing API to
-			// signal it is ready. This covers unknown, discovered, and crawled-but-
-			// not-indexed states, giving Google a stronger hint to prioritise it.
-			dc_gi_enqueue_url( $list[ $k ]['url'], 'URL_UPDATED' );
+			// Only re-submit if the daily Indexing API quota has not been exhausted.
+			if ( $quota_ok ) {
+				// Google has not indexed the URL yet — re-submit via Indexing API to
+				// signal it is ready. This covers unknown, discovered, and crawled-but-
+				// not-indexed states, giving Google a stronger hint to prioritise it.
+				dc_gi_enqueue_url( $list[ $k ]['url'], 'URL_UPDATED' );
+			}
 		}
 	}
 
@@ -456,6 +475,11 @@ function dc_gi_run_poll_batch( bool $force = false ): string {
 	// Only run when polling is active (skip check when forced via manual trigger).
 	if ( ! $force && ! get_option( 'dc_gi_poll_active', false ) ) {
 		return 'early:not_active';
+	}
+	// Stop polling when the daily Indexing API quota is exhausted — inspecting URLs
+	// serves no purpose if we cannot submit them.
+	if ( dc_gi_is_quota_exhausted() ) {
+		return 'early:quota_exhausted';
 	}
 	// Simple lock to prevent concurrent cron + AJAX runs.
 	if ( get_transient( 'dc_gi_poll_lock' ) ) {
@@ -615,6 +639,16 @@ function dc_gi_set_poll_active( bool $active ): void {
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
 function dc_gi_get_quota_used(): int {
 	return (int) get_transient( 'dc_gi_quota_' . gmdate( 'Y-m-d' ) );
+}
+
+/**
+ * Return true when the daily Indexing API quota is fully consumed.
+ */
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_is_quota_exhausted(): bool {
+	$settings = dc_gi_get_settings();
+	$limit    = min( DC_GI_DAILY_CAP, (int) ( $settings['daily_quota'] ?? DC_GI_DAILY_CAP ) );
+	return dc_gi_get_quota_used() >= $limit;
 }
 
 // =============================================================================

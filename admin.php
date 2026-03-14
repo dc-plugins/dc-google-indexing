@@ -78,26 +78,58 @@ function dc_gi_enqueue_scripts( string $hook ): void {
 	wp_register_script( 'dc-gi-admin', false, [ 'jquery' ], DC_GI_VERSION, true );
 	wp_enqueue_script( 'dc-gi-admin' );
 	wp_localize_script( 'dc-gi-admin', 'dcGiPoll', [
-		'nonce'       => wp_create_nonce( 'dc_gi_ajax' ),
-		'ajaxurl'     => admin_url( 'admin-ajax.php' ),
-		'active'      => (bool) get_option( 'dc_gi_poll_active', false ),
-		'watchActive' => (bool) get_option( 'dc_gi_watch_active', false ),
-		'watchOffset' => (int) get_option( 'dc_gi_watch_offset', 0 ),
-		'watchTotal'  => count( (array) get_option( 'dc_gi_watchlist', [] ) ),
-		'i18n'        => [
-			'starting'      => __( 'Starting…', 'dc-google-indexing' ),
-			'stopping'      => __( 'Stopping…', 'dc-google-indexing' ),
-			'running'       => __( 'Running', 'dc-google-indexing' ),
-			'stopped'       => __( '○ Stopped', 'dc-google-indexing' ),
-			'done'          => __( '✅ Cycle complete', 'dc-google-indexing' ),
-			'errComms'      => __( 'Communication error — retrying…', 'dc-google-indexing' ),
-			'watchRunning'  => __( '● Running in background', 'dc-google-indexing' ),
-			'watchStopped'  => __( '○ Stopped', 'dc-google-indexing' ),
-			'watchDone'     => __( '✅ Check complete', 'dc-google-indexing' ),
+		'nonce'           => wp_create_nonce( 'dc_gi_ajax' ),
+		'ajaxurl'         => admin_url( 'admin-ajax.php' ),
+		'active'          => (bool) get_option( 'dc_gi_poll_active', false ),
+		'watchActive'     => (bool) get_option( 'dc_gi_watch_active', false ),
+		'watchOffset'     => (int) get_option( 'dc_gi_watch_offset', 0 ),
+		'watchTotal'      => count( (array) get_option( 'dc_gi_watchlist', [] ) ),
+		'quotaExhausted'  => dc_gi_is_quota_exhausted(),
+		'i18n'            => [
+			'starting'          => __( 'Starting…', 'dc-google-indexing' ),
+			'stopping'          => __( 'Stopping…', 'dc-google-indexing' ),
+			'running'           => __( 'Running', 'dc-google-indexing' ),
+			'stopped'           => __( '○ Stopped', 'dc-google-indexing' ),
+			'done'              => __( '✅ Cycle complete', 'dc-google-indexing' ),
+			'quotaExhausted'    => __( '🚫 Daily quota exhausted', 'dc-google-indexing' ),
+			'errComms'          => __( 'Communication error — retrying…', 'dc-google-indexing' ),
+			'watchRunning'      => __( '● Running in background', 'dc-google-indexing' ),
+			'watchStopped'      => __( '○ Stopped', 'dc-google-indexing' ),
+			'watchDone'         => __( '✅ Check complete', 'dc-google-indexing' ),
 		],
 	] );
 	wp_add_inline_script( 'dc-gi-admin', dc_gi_poll_js() );
 	wp_add_inline_script( 'dc-gi-admin', dc_gi_watch_check_js() );
+}
+
+// Sticky admin notice when daily Indexing API quota is exhausted.
+add_action( 'admin_notices', 'dc_gi_quota_exhausted_notice' );
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_quota_exhausted_notice(): void {
+	if ( ! current_user_can( 'manage_options' ) ) {
+		return;
+	}
+	if ( ! dc_gi_is_quota_exhausted() ) {
+		return;
+	}
+	$settings    = dc_gi_get_settings();
+	$quota_limit = min( DC_GI_DAILY_CAP, (int) ( $settings['daily_quota'] ?? DC_GI_DAILY_CAP ) );
+	$quota_used  = dc_gi_get_quota_used();
+	?>
+	<div class="notice notice-warning" style="border-left-color:#ff8d72">
+		<p>
+			<strong><?php esc_html_e( '⚠️ DC Google Indexing — Daily quota exhausted', 'dc-google-indexing' ); ?></strong>
+			<?php
+			printf(
+				/* translators: 1: used count, 2: daily limit */
+				esc_html__( '(%1$d / %2$d submissions used today). Queue processing, polling and watchlist re-submissions are paused until the quota resets at midnight UTC.', 'dc-google-indexing' ),
+				(int) $quota_used,
+				(int) $quota_limit
+			);
+			?>
+		</p>
+	</div>
+	<?php
 }
 
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
@@ -113,23 +145,40 @@ function dc_gi_poll_js(): string {
 	}
 
 	function updateUI(data) {
-		var active = data.active;
-		var lp     = data.last_poll || {};
-		var seen   = data.cycle_seen  || (lp.cycle_seen  || 0);
-		var total  = data.cycle_total || (lp.cycle_total || 0);
-		var done   = lp.cycle_done || false;
-		var p      = pct(seen, total);
+		var active        = data.active;
+		var quotaHit      = data.quota_exhausted || false;
+		var lp            = data.last_poll || {};
+		var seen          = data.cycle_seen  || (lp.cycle_seen  || 0);
+		var total         = data.cycle_total || (lp.cycle_total || 0);
+		var done          = lp.cycle_done || false;
+		var p             = pct(seen, total);
+		var quotaUsed     = data.quota_used  != null ? data.quota_used  : null;
+		var quotaLimit    = data.quota_limit != null ? data.quota_limit : null;
 
 		if (lp.time) lastTs = lp.time;
 
-		var badge  = done ? dcGiPoll.i18n.done : (active ? dcGiPoll.i18n.running : dcGiPoll.i18n.stopped);
+		var badgeText;
+		var badgeClass;
+		if (quotaHit) {
+			badgeText  = dcGiPoll.i18n.quotaExhausted;
+			badgeClass = 'stopped';
+		} else if (done) {
+			badgeText  = dcGiPoll.i18n.done;
+			badgeClass = 'done';
+		} else if (active) {
+			badgeText  = dcGiPoll.i18n.running;
+			badgeClass = 'running';
+		} else {
+			badgeText  = dcGiPoll.i18n.stopped;
+			badgeClass = 'stopped';
+		}
 		var $badge = $('#dc-gi-status-badge');
-		$badge.attr('class', 'dc-gi-poll-badge ' + (done ? 'done' : (active ? 'running' : 'stopped')));
+		$badge.attr('class', 'dc-gi-poll-badge ' + badgeClass);
 		$badge.find('.dc-gi-spinner').remove();
-		if (active && !done) {
+		if (active && !done && !quotaHit) {
 			$badge.prepend('<span class="dc-gi-spinner"></span>');
 		}
-		$badge.find('.dc-gi-badge-text').text(badge);
+		$badge.find('.dc-gi-badge-text').text(badgeText);
 
 		$('#dc-gi-prog-bar').css('width', p + '%').css('background', done ? '#46b450' : '#2271b1');
 		$('#dc-gi-prog-label').text(total > 0 ? seen + ' / ' + total + ' (' + p + '%)' : '—');
@@ -150,8 +199,14 @@ function dc_gi_poll_js(): string {
 		}
 
 		$('#dc-gi-queue-count').text(data.queue_count || 0);
-		$('#dc-gi-start-btn').prop('disabled', active || done).text('\u25b6 Start Polling');
-		$('#dc-gi-stop-btn').prop('disabled', !active);
+		// Keep the status-bar header queue count in sync.
+		$('#dc-gi-header-queue').text(data.queue_count || 0);
+		// Update live quota display if present.
+		if (quotaUsed !== null && quotaLimit !== null) {
+			$('#dc-gi-quota-live').text(quotaUsed + ' / ' + quotaLimit);
+		}
+		$('#dc-gi-start-btn').prop('disabled', active || done || quotaHit).text('\u25b6 Start Polling');
+		$('#dc-gi-stop-btn').prop('disabled', !active || quotaHit);
 	}
 
 	function setBadgeRunning() {
@@ -183,11 +238,12 @@ function dc_gi_poll_js(): string {
 			console.log('[dcGi] poll_wait response:', JSON.stringify(r));
 			if (r.success) {
 				updateUI(r.data);
-				if (r.data.active && !stopped) {
+				var quotaHit = r.data.quota_exhausted || false;
+				if (r.data.active && !stopped && !quotaHit) {
 					longPoll();
 				} else {
 					setBadgeStopped();
-					console.log('[dcGi] longPoll stopping: active=' + r.data.active + ' stopped=' + stopped);
+					console.log('[dcGi] longPoll stopping: active=' + r.data.active + ' stopped=' + stopped + ' quotaHit=' + quotaHit);
 				}
 			}
 		})
@@ -196,6 +252,14 @@ function dc_gi_poll_js(): string {
 			console.warn('[dcGi] poll_wait failed, retrying in 2s', xhr.status, xhr.statusText);
 			setTimeout(longPoll, 2000);
 		});
+	}
+
+	// Disable start button immediately if quota is already exhausted on page load.
+	if (dcGiPoll.quotaExhausted) {
+		$('#dc-gi-start-btn').prop('disabled', true);
+		var $badge = $('#dc-gi-status-badge');
+		$badge.attr('class', 'dc-gi-poll-badge stopped');
+		$badge.find('.dc-gi-badge-text').text(dcGiPoll.i18n.quotaExhausted);
 	}
 
 	$(function(){
@@ -519,6 +583,7 @@ function dc_gi_handle_save(): void {
 	update_option( 'dc_gi_settings', [
 		'service_account_json' => $raw_json,
 		'auto_submit'          => ! empty( $_POST['auto_submit'] ) ? 1 : 0,
+		'auto_delete'          => ! empty( $_POST['auto_delete'] ) ? 1 : 0,
 		'post_types'           => $post_types,
 		'daily_quota'          => min( 200, max( 1, absint( isset( $_POST['daily_quota'] ) ? wp_unslash( $_POST['daily_quota'] ) : 200 ) ) ),
 		'footer_credit'        => ! empty( $_POST['footer_credit'] ) ? 1 : 0,
@@ -1028,13 +1093,20 @@ function dc_gi_ajax_poll_wait(): void {
 	$is_active   = ! empty( $row_active2 );
 	$queue       = $row_queue ? (array) maybe_unserialize( $row_queue ) : [];
 
+	$settings    = dc_gi_get_settings();
+	$quota_used  = dc_gi_get_quota_used();
+	$quota_limit = min( DC_GI_DAILY_CAP, (int) ( $settings['daily_quota'] ?? DC_GI_DAILY_CAP ) );
+
 	wp_send_json_success( [
-		'active'       => $is_active,
-		'last_poll'    => $last_poll ?: null,
-		'cycle_seen'   => count( $poll_seen ),
-		'cycle_total'  => $last_poll['cycle_total'] ?? 0,
-		'queue_count'  => count( $queue ),
-		'batch_status' => $batch_status,
+		'active'          => $is_active,
+		'last_poll'       => $last_poll ?: null,
+		'cycle_seen'      => count( $poll_seen ),
+		'cycle_total'     => $last_poll['cycle_total'] ?? 0,
+		'queue_count'     => count( $queue ),
+		'batch_status'    => $batch_status,
+		'quota_used'      => $quota_used,
+		'quota_limit'     => $quota_limit,
+		'quota_exhausted' => $quota_used >= $quota_limit,
 	] );
 }
 
@@ -1043,12 +1115,18 @@ function dc_gi_poll_status_data(): array {
 	$last_poll   = get_transient( 'dc_gi_last_poll' );
 	$poll_seen   = (array) get_option( 'dc_gi_poll_seen', [] );
 	$active      = (bool) get_option( 'dc_gi_poll_active', false );
+	$settings    = dc_gi_get_settings();
+	$quota_used  = dc_gi_get_quota_used();
+	$quota_limit = min( DC_GI_DAILY_CAP, (int) ( $settings['daily_quota'] ?? DC_GI_DAILY_CAP ) );
 	return [
-		'active'       => $active,
-		'last_poll'    => $last_poll ?: null,
-		'cycle_seen'   => count( $poll_seen ),
-		'cycle_total'  => $last_poll['cycle_total'] ?? 0,
-		'queue_count'  => count( (array) get_option( 'dc_gi_queue', [] ) ),
+		'active'           => $active,
+		'last_poll'        => $last_poll ?: null,
+		'cycle_seen'       => count( $poll_seen ),
+		'cycle_total'      => $last_poll['cycle_total'] ?? 0,
+		'queue_count'      => count( (array) get_option( 'dc_gi_queue', [] ) ),
+		'quota_used'       => $quota_used,
+		'quota_limit'      => $quota_limit,
+		'quota_exhausted'  => $quota_used >= $quota_limit,
 	];
 }
 
@@ -1889,6 +1967,22 @@ function dc_gi_render_page(): void {
 					</td>
 				</tr>
 				<tr>
+					<th scope="row"><?php esc_html_e( 'Auto-delete on Remove', 'dc-google-indexing' ); ?></th>
+					<td>
+						<label>
+							<?php
+							// Default to checked (1) for sites upgrading from a version without this setting.
+							$auto_delete_val = isset( $settings['auto_delete'] ) ? $settings['auto_delete'] : 1;
+							?>
+							<input type="checkbox" name="auto_delete" value="1" <?php checked( ! empty( $auto_delete_val ) ); ?>>
+							<?php esc_html_e( 'Automatically notify Google to de-index URLs when a post is trashed, unpublished, or password-protected', 'dc-google-indexing' ); ?>
+						</label>
+						<p class="description">
+							<?php esc_html_e( 'Sends a URL_DELETED notification for posts that are moved to Trash, switched to Draft/Private/Pending, or have a password added. Disable this if you manage de-indexing separately.', 'dc-google-indexing' ); ?>
+						</p>
+					</td>
+				</tr>
+				<tr>
 					<th scope="row"><?php esc_html_e( 'Post Types', 'dc-google-indexing' ); ?></th>
 					<td>
 						<?php
@@ -2248,12 +2342,24 @@ function dc_gi_render_page(): void {
 		</div>
 		<?php else : ?>
 
-
+		<?php if ( dc_gi_is_quota_exhausted() ) : ?>
+		<div class="dc-gi-callout err" style="margin-bottom:16px">
+			<strong><?php esc_html_e( '🚫 Daily quota exhausted', 'dc-google-indexing' ); ?></strong> &mdash;
+			<?php
+			printf(
+				/* translators: 1: used count, 2: limit */
+				esc_html__( '%1$d / %2$d submissions used today. Polling is paused until quota resets at midnight UTC.', 'dc-google-indexing' ),
+				esc_html( (string) $quota_used ),
+				esc_html( (string) $quota_limit )
+			);
+			?>
+		</div>
+		<?php endif; ?>
 
 		<div class="dc-gi-live-panel">
 			<div class="dc-gi-live-btn-row">
 				<span id="dc-gi-status-badge" class="dc-gi-poll-badge stopped"><span class="dc-gi-badge-text"><?php esc_html_e( '○ Stopped', 'dc-google-indexing' ); ?></span></span>
-				<button id="dc-gi-start-btn" class="button dc-gi-btn-start"><?php esc_html_e( '▶ Start Polling', 'dc-google-indexing' ); ?></button>
+				<button id="dc-gi-start-btn" class="button dc-gi-btn-start" <?php disabled( dc_gi_is_quota_exhausted() ); ?>><?php esc_html_e( '▶ Start Polling', 'dc-google-indexing' ); ?></button>
 				<button id="dc-gi-stop-btn" class="button dc-gi-btn-stop" disabled><?php esc_html_e( '■ Stop', 'dc-google-indexing' ); ?></button>
 				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin:0">
 					<?php wp_nonce_field( 'dc_gi_poll_reset' ); ?>
@@ -2299,6 +2405,7 @@ function dc_gi_render_page(): void {
 
 			<p style="font-size:11px;color:#7a8499;margin:16px 0 0;padding-top:14px;border-top:1px solid rgba(45,53,85,.5)">
 				<?php esc_html_e( '1 URL per batch · runs every 1 minute via WP-Cron · continues if you leave this page', 'dc-google-indexing' ); ?>&ensp;|&ensp;<?php esc_html_e( 'Queue:', 'dc-google-indexing' ); ?> <strong style="color:#c8d0e0" id="dc-gi-queue-count">—</strong>
+				&ensp;|&ensp;<?php esc_html_e( 'Quota today:', 'dc-google-indexing' ); ?> <strong style="color:<?php echo dc_gi_is_quota_exhausted() ? '#fd5d93' : '#c8d0e0'; ?>" id="dc-gi-quota-live"><?php echo esc_html( $quota_used . ' / ' . $quota_limit ); ?></strong>
 			</p>
 		</div>
 
