@@ -2405,7 +2405,7 @@ function dc_gi_render_page(): void {
 
 			<p style="font-size:11px;color:#7a8499;margin:16px 0 0;padding-top:14px;border-top:1px solid rgba(45,53,85,.5)">
 				<?php esc_html_e( '1 URL per batch · runs every 1 minute via WP-Cron · continues if you leave this page', 'dc-google-indexing' ); ?>&ensp;|&ensp;<?php esc_html_e( 'Queue:', 'dc-google-indexing' ); ?> <strong style="color:#c8d0e0" id="dc-gi-queue-count">—</strong>
-				&ensp;|&ensp;<?php esc_html_e( 'Quota today:', 'dc-google-indexing' ); ?> <strong style="color:<?php echo dc_gi_is_quota_exhausted() ? '#fd5d93' : '#c8d0e0'; ?>" id="dc-gi-quota-live"><?php echo esc_html( $quota_used . ' / ' . $quota_limit ); ?></strong>
+				&ensp;|&ensp;<?php esc_html_e( 'Quota today:', 'dc-google-indexing' ); ?> <strong style="color:<?php echo esc_attr( dc_gi_is_quota_exhausted() ? '#fd5d93' : '#c8d0e0' ); ?>" id="dc-gi-quota-live"><?php echo esc_html( $quota_used . ' / ' . $quota_limit ); ?></strong>
 			</p>
 		</div>
 

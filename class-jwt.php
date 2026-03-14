@@ -287,7 +287,9 @@ class DC_GI_JWT {
 		}
 
 		// Build multipart/mixed body.
-		$boundary = 'batch_' . md5( microtime( true ) . wp_rand() );
+		// The boundary is a MIME delimiter, not used in a security context — uniqueness
+		// is the only requirement. We combine time + random to guarantee uniqueness.
+		$boundary = 'batch_' . wp_generate_password( 16, false ) . '_' . time();
 		$parts    = [];
 
 		foreach ( $items as $i => $item ) {
@@ -404,8 +406,13 @@ class DC_GI_JWT {
 			}
 
 			// Determine URL index from Content-ID header, falling back to order.
+			// Google returns the response Content-ID as the original ID prefixed with
+			// "response-". Our request sends "<item{N}>", so the response can come
+			// back as "<response-item{N}>", "response-item{N}", or "response-<item{N}>".
 			$idx = $part_idx;
 			if ( preg_match( '/Content-ID:\s*<response-item(\d+)>/i', $outer_hdr, $cm ) ) {
+				$idx = (int) $cm[1];
+			} elseif ( preg_match( '/Content-ID:\s*response-<item(\d+)>/i', $outer_hdr, $cm ) ) {
 				$idx = (int) $cm[1];
 			} elseif ( preg_match( '/Content-ID:\s*response-item(\d+)/i', $outer_hdr, $cm ) ) {
 				$idx = (int) $cm[1];

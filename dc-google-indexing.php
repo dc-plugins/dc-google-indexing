@@ -223,6 +223,7 @@ function dc_gi_process_queue(): void {
 		return;
 	}
 
+	// Google Batch API allows up to 100 requests per batch call.
 	$can_process = min( 100, $limit - $used );
 	$batch       = array_splice( $queue, 0, $can_process );
 	update_option( 'dc_gi_queue', $queue, false );
