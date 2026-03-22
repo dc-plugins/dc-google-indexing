@@ -1077,8 +1077,13 @@ function dc_gi_ajax_watch_check_one(): void {
 					$entry['coverage'] = $coverage ?: 'URL is unknown to Google';
 					$entry['coverage'] .= ' (re-queued for submission)';
 				}
-				// Flag for manual QA when Google has discovered but not indexed the URL.
-				if ( 'Discovered - currently not indexed' === $coverage ) {
+				// Flag for manual QA when Google has seen the URL but not indexed it yet.
+				$qa_states = [
+					'Crawled - currently not indexed',
+					'Discovered - currently not indexed',
+					'URL is unknown to Google',
+				];
+				if ( in_array( $coverage, $qa_states, true ) ) {
 					dc_gi_qa_pending_add( $entry_url );
 				}
 				$entry['status'] = 'pending';
