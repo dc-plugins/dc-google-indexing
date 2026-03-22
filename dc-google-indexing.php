@@ -227,6 +227,7 @@ function dc_gi_process_queue(): void {
 	$can_process = min( 100, $limit - $used );
 	$batch       = array_splice( $queue, 0, $can_process );
 	update_option( 'dc_gi_queue', $queue, false );
+	wp_cache_delete( 'dc_gi_queue', 'options' ); // Force-bust Redis persistent object cache.
 
 	// Submit all items in a single batch request to reduce HTTP overhead.
 	$results = DC_GI_JWT::submit_batch( $sa, $batch );
@@ -254,6 +255,7 @@ function dc_gi_process_queue(): void {
 			}
 		}
 		update_option( 'dc_gi_queue', $current_queue, false );
+		wp_cache_delete( 'dc_gi_queue', 'options' ); // Force-bust Redis persistent object cache.
 	}
 }
 

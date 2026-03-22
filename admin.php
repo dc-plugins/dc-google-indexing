@@ -1620,6 +1620,8 @@ function dc_gi_render_page(): void {
 	}
 
 	$settings    = dc_gi_get_settings();
+	// Bypass Redis persistent object cache so the queue count is always fresh.
+	wp_cache_delete( 'dc_gi_queue', 'options' );
 	$queue       = get_option( 'dc_gi_queue', [] );
 	$log         = get_option( 'dc_gi_log', [] );
 	$watchlist   = dc_gi_watchlist_get();
