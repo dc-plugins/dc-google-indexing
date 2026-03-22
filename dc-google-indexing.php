@@ -516,7 +516,7 @@ function dc_gi_run_poll_batch( bool $force = false ): string {
 		}
 
 		$site_url    = trailingslashit( get_home_url() );
-		$batch_size  = 1;
+		$batch_size  = 5;
 		$submittable = [
 			'Crawled - currently not indexed',
 			'Discovered - currently not indexed',
