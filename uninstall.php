@@ -15,10 +15,17 @@ delete_option( 'dc_gi_log' );
 delete_option( 'dc_gi_watchlist' );
 delete_option( 'dc_gi_poll_seen' );
 delete_option( 'dc_gi_poll_active' );
+delete_option( 'dc_gi_watch_active' );
+delete_option( 'dc_gi_watch_offset' );
+delete_option( 'dc_gi_qa_active' );
+delete_option( 'dc_gi_qa_offset' );
+delete_option( 'dc_gi_qa_pending' );
+delete_option( 'dc_gi_qa_results' );
 delete_transient( 'dc_gi_access_token' );
 delete_transient( 'dc_gi_inspection_token' );
 delete_transient( 'dc_gi_last_poll' );
 delete_transient( 'dc_gi_poll_lock' );
+delete_transient( 'dc_gi_sitemap_urls_cache' );
 
 // Remove daily quota transients
 global $wpdb;
@@ -27,6 +34,9 @@ $wpdb->query( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, Word
 );
 
 wp_clear_scheduled_hook( 'dc_gi_process_queue' );
+wp_clear_scheduled_hook( 'dc_gi_check_watchlist' );
+wp_clear_scheduled_hook( 'dc_gi_watch_check_one_cron' );
+wp_clear_scheduled_hook( 'dc_gi_poll_batch' );
 
 // Footer credit cache
 delete_transient( 'dc_gi_footer_strategy' );
