@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 /**
  * Admin interface for DC Google Indexing.
  *
