@@ -60,9 +60,6 @@ add_action( 'wp_ajax_dc_gi_poll_start',  'dc_gi_ajax_poll_start' );
 add_action( 'wp_ajax_dc_gi_poll_stop',   'dc_gi_ajax_poll_stop' );
 add_action( 'wp_ajax_dc_gi_poll_status', 'dc_gi_ajax_poll_status' );
 add_action( 'wp_ajax_dc_gi_poll_wait',   'dc_gi_ajax_poll_wait' );
-add_action( 'wp_ajax_dc_gi_poll_debug',    'dc_gi_ajax_poll_debug' );
-add_action( 'wp_ajax_dc_gi_poll_fix_cron', 'dc_gi_ajax_poll_fix_cron' );
-add_action( 'wp_ajax_dc_gi_poll_trigger',  'dc_gi_ajax_poll_trigger' );
 add_action( 'wp_ajax_dc_gi_watch_check_one',    'dc_gi_ajax_watch_check_one' );
 add_action( 'wp_ajax_dc_gi_watch_stop',          'dc_gi_ajax_watch_stop' );
 add_action( 'wp_ajax_dc_gi_watch_resubmit_one',  'dc_gi_ajax_watch_resubmit_one' );
@@ -209,8 +206,9 @@ function dc_gi_poll_js(): string {
 		}
 
 		$('#dc-gi-queue-count').text(data.queue_count || 0);
-		// Keep the status-bar header queue count in sync.
+		// Keep the status-bar header queue count and Queue tab body count in sync.
 		$('#dc-gi-header-queue').text(data.queue_count || 0);
+		$('#dc-gi-queue-body-count').text(data.queue_count || 0);
 		// Update live quota display if present.
 		if (quotaUsed !== null && quotaLimit !== null) {
 			$('#dc-gi-quota-live').text(quotaUsed + ' / ' + quotaLimit);
@@ -292,53 +290,6 @@ function dc_gi_poll_js(): string {
 			setBadgeStopped();
 			// Tell the server to clear the active flag — no UI update, badge already correct.
 			$.post(dcGiPoll.ajaxurl, {action:'dc_gi_poll_stop', nonce:dcGiPoll.nonce});
-		});
-
-		$('#dc-gi-debug-btn').on('click', function(){
-			$('#dc-gi-debug-out').text('Loading\u2026');
-			$.post(dcGiPoll.ajaxurl, {action:'dc_gi_poll_debug', nonce:dcGiPoll.nonce})
-				.done(function(r){
-					console.log('[dcGi] debug:', JSON.stringify(r, null, 2));
-					if (r.success) $('#dc-gi-debug-out').text(JSON.stringify(r.data, null, 2));
-				});
-		});
-
-		$('#dc-gi-fix-cron-btn').on('click', function(){
-			var $btn = $(this).prop('disabled', true).text('Scheduling\u2026');
-			$.post(dcGiPoll.ajaxurl, {action:'dc_gi_poll_fix_cron', nonce:dcGiPoll.nonce})
-				.done(function(r){
-					console.log('[dcGi] fix_cron:', JSON.stringify(r));
-					$btn.prop('disabled', false).text('\u21ba Fix Cron Schedule');
-					$('#dc-gi-debug-out').text(r.success ? '\u2705 ' + r.data : '\u274c ' + JSON.stringify(r));
-				});
-		});
-
-		$('#dc-gi-trigger-btn').on('click', function(){
-			var $btn = $(this).prop('disabled', true).text('Running batch\u2026');
-			$('#dc-gi-debug-out').text('Triggering batch \u2014 this may take 5\u201310s\u2026');
-			$.post(dcGiPoll.ajaxurl, {action:'dc_gi_poll_trigger', nonce:dcGiPoll.nonce})
-				.done(function(r){
-					console.log('[dcGi] trigger:', JSON.stringify(r, null, 2));
-					$btn.prop('disabled', false).text('\u25b6 Run One Batch Now');
-					if (r.success) {
-						updateUI({
-							active:      true,
-							last_poll:   r.data.result,
-							cycle_seen:  r.data.result ? (r.data.result.cycle_seen  || 0) : 0,
-							cycle_total: r.data.result ? (r.data.result.cycle_total || 0) : 0,
-							queue_count: 0
-						});
-						$('#dc-gi-debug-out').text(
-							r.data.batch_ran
-								? '\u2705 Batch ran! status=' + r.data.batch_status + '\n' + JSON.stringify(r.data.result, null, 2)
-								: '\u26a0\ufe0f Batch did NOT run.\nbatch_status: ' + r.data.batch_status + '\nlock_was_stuck: ' + r.data.lock_was_stuck + '\n\n' + JSON.stringify(r.data, null, 2)
-						);
-					}
-				})
-				.fail(function(xhr){
-					$btn.prop('disabled', false).text('\u25b6 Run One Batch Now');
-					$('#dc-gi-debug-out').text('Error: ' + xhr.status + ' ' + xhr.responseText.substring(0, 300));
-				});
 		});
 
 		// Initial status on page load.
@@ -1258,6 +1209,9 @@ function dc_gi_ajax_poll_stop(): void {
 		wp_send_json_error( 'Forbidden', 403 );
 	}
 	dc_gi_set_poll_active( false );
+	// Clear the cycle cursor so the next start begins a fresh cycle rather than
+	// resuming from a potentially stale poll_seen list.
+	delete_option( 'dc_gi_poll_seen' );
 	wp_send_json_success( dc_gi_poll_status_data() );
 }
 
@@ -1332,11 +1286,14 @@ function dc_gi_ajax_poll_wait(): void {
 	$quota_used  = dc_gi_get_quota_used();
 	$quota_limit = min( DC_GI_DAILY_CAP, (int) ( $settings['daily_quota'] ?? DC_GI_DAILY_CAP ) );
 
+	$cycle_seen_w  = count( $poll_seen );
+	$cycle_total_w = $last_poll ? ( $last_poll['cycle_total'] ?? 0 ) : $cycle_seen_w;
+
 	wp_send_json_success( [
 		'active'          => $is_active,
 		'last_poll'       => $last_poll ?: null,
-		'cycle_seen'      => count( $poll_seen ),
-		'cycle_total'     => $last_poll['cycle_total'] ?? 0,
+		'cycle_seen'      => $cycle_seen_w,
+		'cycle_total'     => $cycle_total_w,
 		'queue_count'     => count( $queue ),
 		'batch_status'    => $batch_status,
 		'quota_used'      => $quota_used,
@@ -1353,102 +1310,21 @@ function dc_gi_poll_status_data(): array {
 	$settings    = dc_gi_get_settings();
 	$quota_used  = dc_gi_get_quota_used();
 	$quota_limit = min( DC_GI_DAILY_CAP, (int) ( $settings['daily_quota'] ?? DC_GI_DAILY_CAP ) );
+	$cycle_seen  = count( $poll_seen );
+	// When the last_poll transient has expired but poll_seen still has entries,
+	// use cycle_seen as cycle_total so the UI shows N/N (complete) instead of
+	// the impossible N/0 state.
+	$cycle_total = $last_poll ? ( $last_poll['cycle_total'] ?? 0 ) : $cycle_seen;
 	return [
 		'active'           => $active,
 		'last_poll'        => $last_poll ?: null,
-		'cycle_seen'       => count( $poll_seen ),
-		'cycle_total'      => $last_poll['cycle_total'] ?? 0,
+		'cycle_seen'       => $cycle_seen,
+		'cycle_total'      => $cycle_total,
 		'queue_count'      => count( (array) get_option( 'dc_gi_queue', [] ) ),
 		'quota_used'       => $quota_used,
 		'quota_limit'      => $quota_limit,
 		'quota_exhausted'  => $quota_used >= $quota_limit,
 	];
-}
-
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
-function dc_gi_ajax_poll_debug(): void {
-	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
-	if ( ! current_user_can( 'manage_options' ) ) {
-		wp_send_json_error( 'Forbidden', 403 );
-	}
-	global $wpdb;
-
-	$read = function( string $key ) use ( $wpdb ): mixed {
-		$raw = $wpdb->get_var( $wpdb->prepare(
-			"SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1",
-			$key
-		) );
-		return $raw !== null ? maybe_unserialize( $raw ) : '(not found)';
-	};
-
-	$next_poll = wp_next_scheduled( DC_GI_POLL_HOOK );
-	$next_queue = wp_next_scheduled( DC_GI_CRON_HOOK );
-	$next_watch = wp_next_scheduled( DC_GI_WATCH_HOOK );
-	$last_poll_raw = $read( '_transient_dc_gi_last_poll' );
-	$last_poll_age = ( is_array( $last_poll_raw ) && isset( $last_poll_raw['time'] ) )
-		? ( time() - $last_poll_raw['time'] ) . 's ago'
-		: 'never';
-	wp_send_json_success( [
-		'── Poll state ──'    => '──────────────────────',
-		'poll_active'         => $read( 'dc_gi_poll_active' ),
-		'poll_lock_set'       => $read( '_transient_dc_gi_poll_lock' ) !== '(not found)',
-		'poll_seen_count'     => count( (array) $read( 'dc_gi_poll_seen' ) ),
-		'── Last batch ──'    => '──────────────────────',
-		'last_poll_age'       => $last_poll_age,
-		'last_poll'           => $last_poll_raw,
-		'── Cron schedule ──' => '──────────────────────',
-		'poll_hook'           => DC_GI_POLL_HOOK,
-		'poll_next_in_sec'    => $next_poll ? ( $next_poll - time() ) : '⚠ NOT SCHEDULED — click Fix Schedule',
-		'queue_hook_next_sec' => $next_queue ? ( $next_queue - time() ) : 'not scheduled',
-		'watch_hook_next_sec' => $next_watch ? ( $next_watch - time() ) : 'not scheduled',
-		'── Queue ──'         => '──────────────────────',
-		'queue_count'         => count( (array) $read( 'dc_gi_queue' ) ),
-		'── Server ──'        => '──────────────────────',
-		'server_time'         => gmdate( 'Y-m-d H:i:s', time() ) . ' UTC',
-		'php_max_execution'   => ini_get( 'max_execution_time' ),
-	] );
-}
-
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
-function dc_gi_ajax_poll_fix_cron(): void {
-	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
-	if ( ! current_user_can( 'manage_options' ) ) {
-		wp_send_json_error( 'Forbidden', 403 );
-	}
-	if ( ! wp_next_scheduled( DC_GI_POLL_HOOK ) ) {
-		wp_schedule_event( time(), 'dc_gi_every1', DC_GI_POLL_HOOK );
-		wp_send_json_success( 'Cron scheduled — next run in ~1 minute.' );
-	} else {
-		wp_send_json_success( 'Cron was already scheduled.' );
-	}
-}
-
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
-function dc_gi_ajax_poll_trigger(): void {
-	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
-	if ( ! current_user_can( 'manage_options' ) ) {
-		wp_send_json_error( 'Forbidden', 403 );
-	}
-	// Force-clear the lock so a stuck transient can't block the manual trigger.
-	$lock_was_set = (bool) get_transient( 'dc_gi_poll_lock' );
-	delete_transient( 'dc_gi_poll_lock' );
-	wp_cache_delete( '_transient_dc_gi_poll_lock', 'options' );
-	// Ensure active flag is written to DB.
-	dc_gi_set_poll_active( true );
-
-	$before       = get_transient( 'dc_gi_last_poll' );
-	$before_time  = is_array( $before ) ? ( $before['time'] ?? 0 ) : 0;
-	$batch_status = dc_gi_run_poll_batch( true );
-	$after        = get_transient( 'dc_gi_last_poll' );
-	$after_time   = is_array( $after ) ? ( $after['time'] ?? 0 ) : 0;
-	wp_send_json_success( [
-		'batch_status'   => $batch_status,
-		'lock_was_stuck' => $lock_was_set,
-		'batch_ran'      => $after_time > $before_time,
-		'before_time'    => $before_time,
-		'after_time'     => $after_time,
-		'result'         => $after,
-	] );
 }
 
 // =============================================================================
@@ -2572,11 +2448,7 @@ function dc_gi_render_page(): void {
 
 		<!-- ===== QUEUE ===== -->
 		<p>
-			<strong><?php printf(
-				/* translators: %d: number of URLs in queue */
-				esc_html__( '%d URL(s) pending.', 'dc-google-indexing' ),
-				count( $queue )
-			); ?></strong>
+			<strong><span id="dc-gi-queue-body-count"><?php echo esc_html( (string) count( $queue ) ); ?></span> <?php esc_html_e( 'URL(s) pending.', 'dc-google-indexing' ); ?></strong>
 			<?php esc_html_e( 'Processed automatically every 5 minutes via WP-Cron.', 'dc-google-indexing' ); ?>
 		</p>
 
@@ -2893,19 +2765,6 @@ function dc_gi_render_page(): void {
 				&ensp;|&ensp;<?php esc_html_e( 'Quota today:', 'dc-google-indexing' ); ?> <strong style="color:<?php echo esc_attr( dc_gi_is_quota_exhausted() ? '#fd5d93' : '#c8d0e0' ); ?>" id="dc-gi-quota-live"><?php echo esc_html( $quota_used . ' / ' . $quota_limit ); ?></strong>
 			</p>
 		</div>
-
-		<?php /* DEBUG SECTION — uncomment to re-enable
-		<details style="max-width:680px;margin-bottom:20px" open>
-			<summary style="cursor:pointer;font-size:12px;color:#888;font-weight:600"><?php esc_html_e( '🛠 Debug / Diagnostics', 'dc-google-indexing' ); ?><\/summary>
-			<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
-				<button id="dc-gi-debug-btn" class="button button-small"><?php esc_html_e( '↻ Refresh DB snapshot', 'dc-google-indexing' ); ?><\/button>
-				<button id="dc-gi-fix-cron-btn" class="button button-small" style="color:#856404;border-color:#856404"><?php esc_html_e( '↺ Fix Cron Schedule', 'dc-google-indexing' ); ?><\/button>
-				<button id="dc-gi-trigger-btn" class="button button-small" style="color:#0a3622;border-color:#0a3622"><?php esc_html_e( '🧪 Test One Batch Now', 'dc-google-indexing' ); ?><\/button>
-			<\/div>
-			<p style="font-size:11px;color:#888;margin:6px 0 4px">If <code>poll_next_in_sec<\/code> says <strong>NOT SCHEDULED<\/strong>, click <em>Fix Cron Schedule<\/em>. Use <em>Test One Batch Now<\/em> to verify a single batch runs correctly without starting the full polling loop.<\/p>
-			<pre id="dc-gi-debug-out" style="background:#1e1e1e;color:#d4d4d4;padding:12px;border-radius:4px;font-size:11px;margin-top:4px;max-height:320px;overflow:auto">Click Refresh to load…<\/pre>
-		<\/details>
-		DEBUG SECTION END */ ?>
 
 		<?php endif; ?>
 
