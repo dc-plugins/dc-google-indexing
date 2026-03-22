@@ -27,6 +27,20 @@ define( 'DC_GI_WATCH_CHECK_HOOK', 'dc_gi_watch_check_one_cron' );
 define( 'DC_GI_POLL_HOOK',        'dc_gi_poll_batch' );
 define( 'DC_GI_DAILY_CAP',   200 );
 
+/**
+ * Return the current date string in Pacific Time (America/Los_Angeles).
+ *
+ * Google's Indexing API quota resets at Pacific midnight, so we key our
+ * local counter on the Pacific date rather than UTC to ensure our 200-request
+ * ceiling aligns with Google's 24-hour window.
+ *
+ * @return string Date in Y-m-d format, e.g. "2026-03-22".
+ */
+function dc_gi_quota_date_key(): string {
+	$tz = new DateTimeZone( 'America/Los_Angeles' );
+	return ( new DateTime( 'now', $tz ) )->format( 'Y-m-d' );
+}
+
 require_once DC_GI_DIR . 'class-jwt.php';
 require_once DC_GI_DIR . 'class-sitemap.php';
 require_once DC_GI_DIR . 'admin.php';
@@ -210,8 +224,8 @@ function dc_gi_process_queue(): void {
 		return;
 	}
 
-	// Daily quota
-	$quota_key = 'dc_gi_quota_' . gmdate( 'Y-m-d' );
+	// Daily quota — keyed on Pacific Time date to match Google's quota reset boundary.
+	$quota_key = 'dc_gi_quota_' . dc_gi_quota_date_key();
 	$used      = (int) get_transient( $quota_key );
 	$limit     = min( DC_GI_DAILY_CAP, (int) ( $settings['daily_quota'] ?? DC_GI_DAILY_CAP ) );
 	if ( $used >= $limit ) {
@@ -705,7 +719,7 @@ function dc_gi_set_poll_active( bool $active ): void {
 
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
 function dc_gi_get_quota_used(): int {
-	return (int) get_transient( 'dc_gi_quota_' . gmdate( 'Y-m-d' ) );
+	return (int) get_transient( 'dc_gi_quota_' . dc_gi_quota_date_key() );
 }
 
 /**
