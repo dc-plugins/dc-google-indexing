@@ -534,7 +534,10 @@ function dc_gi_qa_js(): string {
 			missing_h1:            'Missing H1',
 			non_canonical:         'Non-Canonical',
 			duplicate_content:     'Duplicate Content',
-			duplicate_short_desc:  'Duplicate Short Desc'
+			duplicate_short_desc:  'Duplicate Short Desc',
+			thin_content:          'Thin Content (<150 words)',
+			title_mismatch:        'Title Mismatch',
+			duplicate_title:       'Duplicate Title'
 		};
 
 		var issueColors = {
@@ -549,7 +552,10 @@ function dc_gi_qa_js(): string {
 			missing_h1:            '#7a8499',
 			non_canonical:         '#ff8d72',
 			duplicate_content:     '#ff8d72',
-			duplicate_short_desc:  '#ff8d72'
+			duplicate_short_desc:  '#ff8d72',
+			thin_content:          '#ff8d72',
+			title_mismatch:        '#ff8d72',
+			duplicate_title:       '#ff8d72'
 		};
 
 		function issueBadge(type) {
@@ -1404,6 +1410,8 @@ function dc_gi_ajax_qa_scan_one(): void {
 	$content_hash     = '';
 	$short_desc       = '';
 	$short_desc_hash  = '';
+	$title_hash       = '';
+	$word_count       = 0;
 
 	// Fetch the page.
 	$response = wp_remote_get(
@@ -1510,6 +1518,35 @@ function dc_gi_ajax_qa_scan_one(): void {
 			$stripped     = (string) preg_replace( '/\s+/', ' ', wp_strip_all_tags( $body ) );
 			$content_hash = md5( substr( $stripped, 0, 10000 ) );
 
+			// Word count for thin-content detection.
+			$word_count = str_word_count( $stripped );
+			if ( $word_count < 150 ) {
+				$issues[] = 'thin_content';
+			}
+
+			// Title-mismatch: check that at least 2 meaningful words from the title
+			// exist in the page body (guards against hardcoded SEO titles unrelated
+			// to the actual product content).
+			if ( '' !== $title ) {
+				$stop_words  = [ 'a','an','the','and','or','of','in','on','to','for',
+					'at','by','with','from','as','is','are','was','were','be','it','its' ];
+				$title_words = array_filter(
+					array_map( 'mb_strtolower', preg_split( '/[\W]+/u', $title, -1, PREG_SPLIT_NO_EMPTY ) ),
+					static fn( $w ) => mb_strlen( $w, 'UTF-8' ) >= 3 && ! in_array( $w, $stop_words, true )
+				);
+				$body_lower  = mb_strtolower( $stripped, 'UTF-8' );
+				$title_hash  = md5( mb_strtolower( $title, 'UTF-8' ) );
+				$matches     = 0;
+				foreach ( $title_words as $tw ) {
+					if ( false !== mb_strpos( $body_lower, $tw ) ) {
+						$matches++;
+					}
+				}
+				if ( count( $title_words ) > 0 && $matches < 2 ) {
+					$issues[] = 'title_mismatch';
+				}
+			}
+
 			// WooCommerce short description — for duplicate-short-description detection.
 			// Tries standard WooCommerce class first, then common theme variants.
 			$short_desc_patterns = [
@@ -1552,6 +1589,8 @@ function dc_gi_ajax_qa_scan_one(): void {
 		'content_hash'    => $content_hash,
 		'short_desc'      => $short_desc,
 		'short_desc_hash' => $short_desc_hash,
+		'title_hash'      => $title_hash,
+		'word_count'      => $word_count,
 		'scanned_at'      => time(),
 	];
 
@@ -1577,6 +1616,28 @@ function dc_gi_ajax_qa_scan_one(): void {
 						}
 						$results[ $dup_url ]['duplicate_urls'] = array_values(
 							array_filter( $dup_urls, fn( $u ) => $u !== $dup_url )
+						);
+					}
+				}
+			}
+		}
+
+		// — Duplicate page title (same hardcoded SEO title across multiple URLs).
+		$t_hashes = [];
+		foreach ( $results as $r_url => $data ) {
+			if ( ! empty( $data['title_hash'] ) ) {
+				$t_hashes[ $data['title_hash'] ][] = $r_url;
+			}
+		}
+		foreach ( $t_hashes as $t_dup_urls ) {
+			if ( count( $t_dup_urls ) > 1 ) {
+				foreach ( $t_dup_urls as $t_dup_url ) {
+					if ( isset( $results[ $t_dup_url ] ) ) {
+						if ( ! in_array( 'duplicate_title', $results[ $t_dup_url ]['issues'], true ) ) {
+							$results[ $t_dup_url ]['issues'][] = 'duplicate_title';
+						}
+						$results[ $t_dup_url ]['duplicate_title_urls'] = array_values(
+							array_filter( $t_dup_urls, fn( $u ) => $u !== $t_dup_url )
 						);
 					}
 				}
@@ -1624,6 +1685,7 @@ function dc_gi_ajax_qa_scan_one(): void {
 		'issues'      => array_values( array_unique( $issues ) ),
 		'title'       => $title,
 		'meta_desc'   => $meta_desc,
+		'word_count'  => $word_count,
 	] );
 }
 
@@ -2947,7 +3009,7 @@ function dc_gi_render_page(): void {
 
 		<h2 style="margin-top:0"><?php esc_html_e( 'Quality Assurance — On-Page SEO Checker', 'dc-google-indexing' ); ?></h2>
 		<p style="color:#555;max-width:740px">
-			<?php esc_html_e( 'Inspects URLs flagged by the Watchlist (Crawled, Discovered, or unknown to Google) and checks for common on-page issues: 404 errors, noindex directives, missing or short meta description (≤80 chars), missing title or H1, non-canonical URLs, duplicate full-page content, and duplicate WooCommerce short descriptions.', 'dc-google-indexing' ); ?>
+			<?php esc_html_e( 'Inspects URLs flagged by the Watchlist (Crawled, Discovered, or unknown to Google) and checks for common on-page issues: 404 errors, noindex directives, missing or short meta description (≤80 chars), missing title or H1, non-canonical URLs, duplicate full-page content, duplicate WooCommerce short descriptions, thin content (<150 words), SEO title mismatch, and duplicate SEO titles.', 'dc-google-indexing' ); ?>
 		</p>
 
 		<div class="dc-gi-info-grid" style="max-width:860px">
@@ -2991,6 +3053,9 @@ function dc_gi_render_page(): void {
 			'non_canonical'        => __( 'Non-Canonical', 'dc-google-indexing' ),
 			'duplicate_content'    => __( 'Duplicate Content', 'dc-google-indexing' ),
 			'duplicate_short_desc' => __( 'Duplicate Short Desc', 'dc-google-indexing' ),
+			'thin_content'         => __( 'Thin Content (<150 words)', 'dc-google-indexing' ),
+			'title_mismatch'       => __( 'Title Mismatch', 'dc-google-indexing' ),
+			'duplicate_title'      => __( 'Duplicate Title', 'dc-google-indexing' ),
 		];
 
 		$qa_issue_colors = [
@@ -3006,6 +3071,9 @@ function dc_gi_render_page(): void {
 			'non_canonical'        => '#ff8d72',
 			'duplicate_content'    => '#ff8d72',
 			'duplicate_short_desc' => '#ff8d72',
+			'thin_content'         => '#ff8d72',
+			'title_mismatch'       => '#ff8d72',
+			'duplicate_title'      => '#ff8d72',
 		];
 		?>
 
@@ -3153,6 +3221,24 @@ function dc_gi_render_page(): void {
 										mb_strlen( html_entity_decode( $qa_entry['meta_desc'], ENT_QUOTES, 'UTF-8' ), 'UTF-8' ),
 										$qa_entry['meta_desc']
 									) );
+								} elseif ( 'thin_content' === $q_issue && isset( $qa_entry['word_count'] ) ) {
+									$tooltip = esc_attr( sprintf(
+										/* translators: %d: word count */
+										__( '%d words in body', 'dc-google-indexing' ),
+										(int) $qa_entry['word_count']
+									) );
+								} elseif ( 'title_mismatch' === $q_issue && isset( $qa_entry['word_count'] ) ) {
+									$tooltip = esc_attr( sprintf(
+										/* translators: %d: word count */
+										__( 'Title words not found in body (%d words)', 'dc-google-indexing' ),
+										(int) $qa_entry['word_count']
+									) );
+								} elseif ( 'duplicate_title' === $q_issue && ! empty( $qa_entry['duplicate_title_urls'] ) ) {
+									$tooltip = esc_attr( sprintf(
+										/* translators: %s: comma-separated list of URLs sharing the same SEO title */
+										__( 'Same title: %s', 'dc-google-indexing' ),
+										implode( ', ', (array) $qa_entry['duplicate_title_urls'] )
+									) );
 								}
 								?>
 								<span style="display:inline-block;padding:1px 7px;border-radius:9px;font-size:11px;font-weight:600;background:rgba(255,255,255,.08);color:<?php echo esc_attr( $issue_color ); ?>;margin:1px 2px"
@@ -3220,11 +3306,23 @@ function dc_gi_render_page(): void {
 					</li>
 					<li style="padding:5px 0 5px 20px;position:relative;font-size:13px;color:#8892a4">
 						<span style="position:absolute;left:0;color:#ff8d72">!</span>
+						<strong style="color:#c8d0e0"><?php esc_html_e( 'Thin content', 'dc-google-indexing' ); ?></strong> — <?php esc_html_e( 'body text under 150 words; Google considers the page low-value and may skip it even if all other tags are correct.', 'dc-google-indexing' ); ?>
+					</li>
+					<li style="padding:5px 0 5px 20px;position:relative;font-size:13px;color:#8892a4">
+						<span style="position:absolute;left:0;color:#ff8d72">!</span>
+						<strong style="color:#c8d0e0"><?php esc_html_e( 'Title mismatch', 'dc-google-indexing' ); ?></strong> — <?php esc_html_e( 'fewer than 2 meaningful words from the SEO title appear in the page body; typically caused by a hardcoded Rank Math title that is unrelated to the actual product content.', 'dc-google-indexing' ); ?>
+					</li>
+					<li style="padding:5px 0 5px 20px;position:relative;font-size:13px;color:#8892a4">
+						<span style="position:absolute;left:0;color:#ff8d72">!</span>
+						<strong style="color:#c8d0e0"><?php esc_html_e( 'Duplicate title', 'dc-google-indexing' ); ?></strong> — <?php esc_html_e( 'the same SEO title is used across multiple pages; Google treats them as duplicates and may only index one.', 'dc-google-indexing' ); ?>
+					</li>
+					<li style="padding:5px 0 5px 20px;position:relative;font-size:13px;color:#8892a4">
+						<span style="position:absolute;left:0;color:#ff8d72">!</span>
 						<strong style="color:#c8d0e0"><?php esc_html_e( 'Redirect', 'dc-google-indexing' ); ?></strong> — <?php esc_html_e( 'URL in sitemap redirects to another page; only the final destination is indexed.', 'dc-google-indexing' ); ?>
 					</li>
 					<li style="padding:5px 0 5px 20px;position:relative;font-size:13px;color:#8892a4">
 						<span style="position:absolute;left:0;color:#7a8499">–</span>
-						<strong style="color:#c8d0e0"><?php esc_html_e( 'Thin / low-quality content', 'dc-google-indexing' ); ?></strong> — <?php esc_html_e( 'even with correct tags, pages with very little unique content may be skipped by Google.', 'dc-google-indexing' ); ?>
+						<strong style="color:#c8d0e0"><?php esc_html_e( 'Other low-quality signals', 'dc-google-indexing' ); ?></strong> — <?php esc_html_e( 'even with correct tags, pages with very little unique value may be skipped by Google.', 'dc-google-indexing' ); ?>
 					</li>
 				</ul>
 			</div>
