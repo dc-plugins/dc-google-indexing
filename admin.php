@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 /**
  * Admin interface for DC Google Indexing.
  *
@@ -519,29 +519,33 @@ function dc_gi_qa_js(): string {
 		// ── Issue label map ────────────────────────────────────────────────────
 
 		var issueLabels = {
-			fetch_error:      'Fetch Error',
-			not_found:        '404 Not Found',
-			http_error:       'HTTP Error',
-			redirect:         'Redirect',
-			noindex:          'Noindex',
-			missing_title:    'Missing Title',
-			missing_meta_desc:'Missing Meta Desc',
-			missing_h1:       'Missing H1',
-			non_canonical:    'Non-Canonical',
-			duplicate_content:'Duplicate Content'
+			fetch_error:           'Fetch Error',
+			not_found:             '404 Not Found',
+			http_error:            'HTTP Error',
+			redirect:              'Redirect',
+			noindex:               'Noindex',
+			missing_title:         'Missing Title',
+			missing_meta_desc:     'Missing Meta Desc',
+			short_meta_desc:       'Short Meta Desc (≤80)',
+			missing_h1:            'Missing H1',
+			non_canonical:         'Non-Canonical',
+			duplicate_content:     'Duplicate Content',
+			duplicate_short_desc:  'Duplicate Short Desc'
 		};
 
 		var issueColors = {
-			fetch_error:      '#fd5d93',
-			not_found:        '#fd5d93',
-			http_error:       '#fd5d93',
-			redirect:         '#ff8d72',
-			noindex:          '#ff8d72',
-			missing_title:    '#ff8d72',
-			missing_meta_desc:'#ff8d72',
-			missing_h1:       '#7a8499',
-			non_canonical:    '#ff8d72',
-			duplicate_content:'#ff8d72'
+			fetch_error:           '#fd5d93',
+			not_found:             '#fd5d93',
+			http_error:            '#fd5d93',
+			redirect:              '#ff8d72',
+			noindex:               '#ff8d72',
+			missing_title:         '#ff8d72',
+			missing_meta_desc:     '#ff8d72',
+			short_meta_desc:       '#ff8d72',
+			missing_h1:            '#7a8499',
+			non_canonical:         '#ff8d72',
+			duplicate_content:     '#ff8d72',
+			duplicate_short_desc:  '#ff8d72'
 		};
 
 		function issueBadge(type) {
@@ -1389,9 +1393,11 @@ function dc_gi_ajax_qa_scan_one(): void {
 	$title        = '';
 	$meta_desc    = '';
 	$h1           = '';
-	$canonical    = '';
-	$robots       = '';
-	$content_hash = '';
+	$canonical        = '';
+	$robots           = '';
+	$content_hash     = '';
+	$short_desc       = '';
+	$short_desc_hash  = '';
 
 	// Fetch the page.
 	$response = wp_remote_get(
@@ -1466,6 +1472,8 @@ function dc_gi_ajax_qa_scan_one(): void {
 			}
 			if ( '' === $meta_desc ) {
 				$issues[] = 'missing_meta_desc';
+			} elseif ( mb_strlen( html_entity_decode( $meta_desc, ENT_QUOTES, 'UTF-8' ), 'UTF-8' ) <= 80 ) {
+				$issues[] = 'short_meta_desc';
 			}
 
 			// H1 tag.
@@ -1495,6 +1503,32 @@ function dc_gi_ajax_qa_scan_one(): void {
 			// Content hash for duplicate detection (first 10 KB of stripped content).
 			$stripped     = (string) preg_replace( '/\s+/', ' ', wp_strip_all_tags( $body ) );
 			$content_hash = md5( substr( $stripped, 0, 10000 ) );
+
+			// WooCommerce short description — for duplicate-short-description detection.
+			// Tries standard WooCommerce class first, then common theme variants.
+			$short_desc_patterns = [
+				'woocommerce-product-details__short-description',
+				'product-short-description',
+				'short-description',
+			];
+			foreach ( $short_desc_patterns as $sd_class ) {
+				if ( preg_match(
+					'/<div[^>]+class=["\'][^"\']* ' . preg_quote( $sd_class, '/' ) . '[^"\']["\'][^>]*>(.*?)<\/div\s*>/is',
+					$body,
+					$m
+				) || preg_match(
+					'/<div[^>]+class=["\']' . preg_quote( $sd_class, '/' ) . '[^"\'][^>]*>(.*?)<\/div\s*>/is',
+					$body,
+					$m
+				) ) {
+					$sd = trim( html_entity_decode( wp_strip_all_tags( $m[1] ), ENT_QUOTES, 'UTF-8' ) );
+					if ( $sd ) {
+						$short_desc      = $sd;
+						$short_desc_hash = md5( preg_replace( '/\s+/', ' ', mb_strtolower( $sd, 'UTF-8' ) ) );
+						break;
+					}
+				}
+			}
 		}
 	}
 
@@ -1509,15 +1543,19 @@ function dc_gi_ajax_qa_scan_one(): void {
 		'h1'           => $h1,
 		'canonical'    => $canonical,
 		'robots'       => $robots,
-		'content_hash' => $content_hash,
-		'scanned_at'   => time(),
+		'content_hash'    => $content_hash,
+		'short_desc'      => $short_desc,
+		'short_desc_hash' => $short_desc_hash,
+		'scanned_at'      => time(),
 	];
 
 	$next = $offset + 1;
 	$done = $next >= $total;
 
 	if ( $done ) {
-		// Final pass: flag duplicate content across all scanned results.
+		// Final pass: flag duplicate content and duplicate short descriptions.
+
+		// — Duplicate full-page content (first 10 KB hash).
 		$hashes = [];
 		foreach ( $results as $r_url => $data ) {
 			if ( ! empty( $data['content_hash'] ) ) {
@@ -1533,6 +1571,28 @@ function dc_gi_ajax_qa_scan_one(): void {
 						}
 						$results[ $dup_url ]['duplicate_urls'] = array_values(
 							array_filter( $dup_urls, fn( $u ) => $u !== $dup_url )
+						);
+					}
+				}
+			}
+		}
+
+		// — Duplicate WooCommerce short description (normalised hash).
+		$sd_hashes = [];
+		foreach ( $results as $r_url => $data ) {
+			if ( ! empty( $data['short_desc_hash'] ) ) {
+				$sd_hashes[ $data['short_desc_hash'] ][] = $r_url;
+			}
+		}
+		foreach ( $sd_hashes as $sd_dup_urls ) {
+			if ( count( $sd_dup_urls ) > 1 ) {
+				foreach ( $sd_dup_urls as $sd_dup_url ) {
+					if ( isset( $results[ $sd_dup_url ] ) ) {
+						if ( ! in_array( 'duplicate_short_desc', $results[ $sd_dup_url ]['issues'], true ) ) {
+							$results[ $sd_dup_url ]['issues'][] = 'duplicate_short_desc';
+						}
+						$results[ $sd_dup_url ]['duplicate_short_desc_urls'] = array_values(
+							array_filter( $sd_dup_urls, fn( $u ) => $u !== $sd_dup_url )
 						);
 					}
 				}
@@ -1557,6 +1617,7 @@ function dc_gi_ajax_qa_scan_one(): void {
 		'http_status' => $http_status,
 		'issues'      => array_values( array_unique( $issues ) ),
 		'title'       => $title,
+		'meta_desc'   => $meta_desc,
 	] );
 }
 
@@ -2880,13 +2941,13 @@ function dc_gi_render_page(): void {
 
 		<h2 style="margin-top:0"><?php esc_html_e( 'Quality Assurance — On-Page SEO Checker', 'dc-google-indexing' ); ?></h2>
 		<p style="color:#555;max-width:740px">
-			<?php esc_html_e( 'Inspects URLs flagged by the Watchlist as "Discovered — currently not indexed" and checks for common on-page issues preventing indexing: 404 errors, noindex directives, missing title or meta description tags, missing H1 headings, non-canonical URLs, and duplicate content.', 'dc-google-indexing' ); ?>
+			<?php esc_html_e( 'Inspects URLs flagged by the Watchlist (Crawled, Discovered, or unknown to Google) and checks for common on-page issues: 404 errors, noindex directives, missing or short meta description (≤80 chars), missing title or H1, non-canonical URLs, duplicate full-page content, and duplicate WooCommerce short descriptions.', 'dc-google-indexing' ); ?>
 		</p>
 
 		<div class="dc-gi-info-grid" style="max-width:860px">
 			<div class="dc-gi-callout info">
 				<strong><?php esc_html_e( 'Watchlist-driven', 'dc-google-indexing' ); ?></strong><br>
-				<?php esc_html_e( 'URLs are added here automatically by the Watchlist when Google reports them as "Discovered — currently not indexed". QA does not scan the full sitemap — that is Polling\'s job.', 'dc-google-indexing' ); ?>
+				<?php esc_html_e( 'URLs are added here automatically by the Watchlist when Google reports them as "Crawled — not indexed", "Discovered — not indexed", or "URL is unknown to Google". QA does not scan the full sitemap — that is Polling\'s job.', 'dc-google-indexing' ); ?>
 			</div>
 			<div class="dc-gi-callout info">
 				<strong><?php esc_html_e( 'No quota used', 'dc-google-indexing' ); ?></strong><br>
@@ -2912,29 +2973,33 @@ function dc_gi_render_page(): void {
 		}
 
 		$qa_issue_labels = [
-			'fetch_error'       => __( 'Fetch Error', 'dc-google-indexing' ),
-			'not_found'         => __( '404 Not Found', 'dc-google-indexing' ),
-			'http_error'        => __( 'HTTP Error', 'dc-google-indexing' ),
-			'redirect'          => __( 'Redirect', 'dc-google-indexing' ),
-			'noindex'           => __( 'Noindex', 'dc-google-indexing' ),
-			'missing_title'     => __( 'Missing Title', 'dc-google-indexing' ),
-			'missing_meta_desc' => __( 'Missing Meta Desc', 'dc-google-indexing' ),
-			'missing_h1'        => __( 'Missing H1', 'dc-google-indexing' ),
-			'non_canonical'     => __( 'Non-Canonical', 'dc-google-indexing' ),
-			'duplicate_content' => __( 'Duplicate Content', 'dc-google-indexing' ),
+			'fetch_error'          => __( 'Fetch Error', 'dc-google-indexing' ),
+			'not_found'            => __( '404 Not Found', 'dc-google-indexing' ),
+			'http_error'           => __( 'HTTP Error', 'dc-google-indexing' ),
+			'redirect'             => __( 'Redirect', 'dc-google-indexing' ),
+			'noindex'              => __( 'Noindex', 'dc-google-indexing' ),
+			'missing_title'        => __( 'Missing Title', 'dc-google-indexing' ),
+			'missing_meta_desc'    => __( 'Missing Meta Desc', 'dc-google-indexing' ),
+			'short_meta_desc'      => __( 'Short Meta Desc (≤80)', 'dc-google-indexing' ),
+			'missing_h1'           => __( 'Missing H1', 'dc-google-indexing' ),
+			'non_canonical'        => __( 'Non-Canonical', 'dc-google-indexing' ),
+			'duplicate_content'    => __( 'Duplicate Content', 'dc-google-indexing' ),
+			'duplicate_short_desc' => __( 'Duplicate Short Desc', 'dc-google-indexing' ),
 		];
 
 		$qa_issue_colors = [
-			'fetch_error'       => '#fd5d93',
-			'not_found'         => '#fd5d93',
-			'http_error'        => '#fd5d93',
-			'redirect'          => '#ff8d72',
-			'noindex'           => '#ff8d72',
-			'missing_title'     => '#ff8d72',
-			'missing_meta_desc' => '#ff8d72',
-			'missing_h1'        => '#7a8499',
-			'non_canonical'     => '#ff8d72',
-			'duplicate_content' => '#ff8d72',
+			'fetch_error'          => '#fd5d93',
+			'not_found'            => '#fd5d93',
+			'http_error'           => '#fd5d93',
+			'redirect'             => '#ff8d72',
+			'noindex'              => '#ff8d72',
+			'missing_title'        => '#ff8d72',
+			'missing_meta_desc'    => '#ff8d72',
+			'short_meta_desc'      => '#ff8d72',
+			'missing_h1'           => '#7a8499',
+			'non_canonical'        => '#ff8d72',
+			'duplicate_content'    => '#ff8d72',
+			'duplicate_short_desc' => '#ff8d72',
 		];
 		?>
 
@@ -2947,7 +3012,7 @@ function dc_gi_render_page(): void {
 				count( $qa_pending )
 			);
 			?></strong><br>
-			<span style="font-size:12px;opacity:.8"><?php esc_html_e( 'These URLs were found &quot;Discovered — currently not indexed&quot; by the Watchlist and re-queued for submission. Run a scan to investigate possible on-page issues preventing indexing.', 'dc-google-indexing' ); ?></span>
+			<span style="font-size:12px;opacity:.8"><?php esc_html_e( 'These URLs were flagged by the Watchlist (Crawled/Discovered not indexed, or unknown to Google) and re-queued for submission. Run a scan to investigate on-page issues preventing indexing.', 'dc-google-indexing' ); ?></span>
 			<ul style="margin:8px 0 4px;padding-left:20px">
 				<?php foreach ( $qa_pending as $qa_pending_url ) : ?>
 				<li style="font-size:12px"><a href="<?php echo esc_url( $qa_pending_url ); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html( $qa_pending_url ); ?></a></li>
@@ -3069,6 +3134,19 @@ function dc_gi_render_page(): void {
 										__( 'Matches: %s', 'dc-google-indexing' ),
 										implode( ', ', (array) $qa_entry['duplicate_urls'] )
 									) );
+								} elseif ( 'duplicate_short_desc' === $q_issue && ! empty( $qa_entry['duplicate_short_desc_urls'] ) ) {
+									$tooltip = esc_attr( sprintf(
+										/* translators: %s: comma-separated list of URLs sharing the same short description */
+										__( 'Same short desc: %s', 'dc-google-indexing' ),
+										implode( ', ', (array) $qa_entry['duplicate_short_desc_urls'] )
+									) );
+								} elseif ( 'short_meta_desc' === $q_issue && ! empty( $qa_entry['meta_desc'] ) ) {
+									$tooltip = esc_attr( sprintf(
+										/* translators: 1: character count, 2: meta description text */
+										__( '%1$d chars: "%2$s"', 'dc-google-indexing' ),
+										mb_strlen( html_entity_decode( $qa_entry['meta_desc'], ENT_QUOTES, 'UTF-8' ), 'UTF-8' ),
+										$qa_entry['meta_desc']
+									) );
 								}
 								?>
 								<span style="display:inline-block;padding:1px 7px;border-radius:9px;font-size:11px;font-weight:600;background:rgba(255,255,255,.08);color:<?php echo esc_attr( $issue_color ); ?>;margin:1px 2px"
@@ -3111,6 +3189,10 @@ function dc_gi_render_page(): void {
 						<strong style="color:#c8d0e0"><?php esc_html_e( 'Missing meta description', 'dc-google-indexing' ); ?></strong> — <?php esc_html_e( 'thin metadata signals low-quality content to Googlebot.', 'dc-google-indexing' ); ?>
 					</li>
 					<li style="padding:5px 0 5px 20px;position:relative;font-size:13px;color:#8892a4">
+						<span style="position:absolute;left:0;color:#ff8d72">!</span>
+						<strong style="color:#c8d0e0"><?php esc_html_e( 'Short meta description (≤80 chars)', 'dc-google-indexing' ); ?></strong> — <?php esc_html_e( 'Google recommends 120–160 characters; very short descriptions look thin and may be auto-rewritten unfavourably.', 'dc-google-indexing' ); ?>
+					</li>
+					<li style="padding:5px 0 5px 20px;position:relative;font-size:13px;color:#8892a4">
 						<span style="position:absolute;left:0;color:#7a8499">–</span>
 						<strong style="color:#c8d0e0"><?php esc_html_e( 'Missing H1 heading', 'dc-google-indexing' ); ?></strong> — <?php esc_html_e( 'indicates a lack of clear page structure.', 'dc-google-indexing' ); ?>
 					</li>
@@ -3125,6 +3207,10 @@ function dc_gi_render_page(): void {
 					<li style="padding:5px 0 5px 20px;position:relative;font-size:13px;color:#8892a4">
 						<span style="position:absolute;left:0;color:#ff8d72">!</span>
 						<strong style="color:#c8d0e0"><?php esc_html_e( 'Duplicate content', 'dc-google-indexing' ); ?></strong> — <?php esc_html_e( 'multiple URLs serve identical content; Google picks one to index and ignores the others.', 'dc-google-indexing' ); ?>
+					</li>
+					<li style="padding:5px 0 5px 20px;position:relative;font-size:13px;color:#8892a4">
+						<span style="position:absolute;left:0;color:#ff8d72">!</span>
+						<strong style="color:#c8d0e0"><?php esc_html_e( 'Duplicate WooCommerce short description', 'dc-google-indexing' ); ?></strong> — <?php esc_html_e( 'the same product short description is reused across multiple products; Google may treat them as near-duplicate thin content and decline to index all of them.', 'dc-google-indexing' ); ?>
 					</li>
 					<li style="padding:5px 0 5px 20px;position:relative;font-size:13px;color:#8892a4">
 						<span style="position:absolute;left:0;color:#ff8d72">!</span>
