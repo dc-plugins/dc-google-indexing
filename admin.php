@@ -129,7 +129,7 @@ function dc_gi_quota_exhausted_notice(): void {
 			<?php
 			printf(
 				/* translators: 1: used count, 2: daily limit */
-				esc_html__( '(%1$d / %2$d submissions used today). Queue processing, polling and watchlist re-submissions are paused until the quota resets at midnight UTC.', 'dc-google-indexing' ),
+				esc_html__( '(%1$d / %2$d submissions used today). Queue processing, polling and watchlist re-submissions are paused until the quota resets at midnight Pacific Time.', 'dc-google-indexing' ),
 				(int) $quota_used,
 				(int) $quota_limit
 			);
@@ -872,7 +872,7 @@ function dc_gi_handle_clear_queue(): void {
 	if ( ! current_user_can( 'manage_options' ) ) {
 		wp_die( esc_html__( 'Forbidden', 'dc-google-indexing' ) );
 	}
-	update_option( 'dc_gi_queue', [] );
+	update_option( 'dc_gi_queue', [], false );
 	wp_safe_redirect( add_query_arg(
 		[ 'page' => 'dc-google-indexing', 'tab' => 'queue', 'notice' => 'queue_cleared' ],
 		admin_url( 'admin.php' )
@@ -886,7 +886,7 @@ function dc_gi_handle_clear_log(): void {
 	if ( ! current_user_can( 'manage_options' ) ) {
 		wp_die( esc_html__( 'Forbidden', 'dc-google-indexing' ) );
 	}
-	update_option( 'dc_gi_log', [] );
+	update_option( 'dc_gi_log', [], false );
 	wp_safe_redirect( add_query_arg(
 		[ 'page' => 'dc-google-indexing', 'tab' => 'log', 'notice' => 'log_cleared' ],
 		admin_url( 'admin.php' )
@@ -1773,7 +1773,7 @@ function dc_gi_render_page(): void {
 	// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 	$notice_key = isset( $_GET['notice'] ) ? sanitize_key( wp_unslash( $_GET['notice'] ) ) : '';
 	// phpcs:ignore WordPress.Security.NonceVerification.Recommended
-	$errmsg = isset( $_GET['errmsg'] ) ? rawurldecode( sanitize_text_field( wp_unslash( $_GET['errmsg'] ) ) ) : '';
+	$errmsg = isset( $_GET['errmsg'] ) ? sanitize_text_field( rawurldecode( wp_unslash( $_GET['errmsg'] ) ) ) : '';
 	// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 	$queued_count = absint( isset( $_GET['count'] ) ? wp_unslash( $_GET['count'] ) : 0 );
 
