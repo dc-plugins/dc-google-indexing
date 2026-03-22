@@ -231,12 +231,29 @@ function dc_gi_process_queue(): void {
 	// Submit all items in a single batch request to reduce HTTP overhead.
 	$results = DC_GI_JWT::submit_batch( $sa, $batch );
 
+	$failed = [];
 	foreach ( $batch as $item ) {
 		$result = $results[ $item['url'] ] ?? new WP_Error( 'dc_gi_no_response', __( 'No response received.', 'dc-google-indexing' ) );
 		dc_gi_add_log( $item['url'], $item['type'], $result );
 		if ( ! is_wp_error( $result ) ) {
 			set_transient( $quota_key, ++$used, DAY_IN_SECONDS );
+		} else {
+			$failed[] = $item;
 		}
+	}
+
+	// Re-add failed items to the front of the queue so they are retried on the
+	// next run rather than being silently dropped.
+	if ( ! empty( $failed ) ) {
+		$current_queue = get_option( 'dc_gi_queue', [] );
+		$existing_urls = array_column( $current_queue, 'url' );
+		foreach ( array_reverse( $failed ) as $item ) {
+			if ( ! in_array( $item['url'], $existing_urls, true ) ) {
+				array_unshift( $current_queue, $item );
+				$existing_urls[] = $item['url'];
+			}
+		}
+		update_option( 'dc_gi_queue', $current_queue, false );
 	}
 }
 
@@ -301,7 +318,13 @@ function dc_gi_watchlist_add( string $url, string $status = 'pending' ): void {
 		if ( $entry['url'] === $url ) {
 			// If re-submitted for deletion, upgrade existing entry status.
 			if ( 'removal_pending' === $status && 'removed' !== $entry['status'] ) {
-				$entry['status']    = 'removal_pending';
+				$entry['status']       = 'removal_pending';
+				$entry['submitted_at'] = time();
+				unset( $entry );
+				update_option( 'dc_gi_watchlist', $list, false );
+			} elseif ( 'pending' === $status ) {
+				// Refresh the submission timestamp on every re-submission so the
+				// watchlist-check throttle (HOUR_IN_SECONDS) gets a fresh baseline.
 				$entry['submitted_at'] = time();
 				unset( $entry );
 				update_option( 'dc_gi_watchlist', $list, false );
@@ -464,8 +487,11 @@ function dc_gi_run_watchlist_check(): void {
 				unset( $list[ $k ] );
 				continue;
 			}
-			// Only re-submit if the daily Indexing API quota has not been exhausted.
-			if ( $quota_ok ) {
+			// Only re-submit if the daily Indexing API quota has not been exhausted
+			// and at least one hour has elapsed since the last submission — this
+			// prevents Check Now from immediately re-populating the queue with URLs
+			// that were just submitted and haven't been crawled by Google yet.
+			if ( $quota_ok && time() - (int) ( $list[ $k ]['submitted_at'] ?? 0 ) > HOUR_IN_SECONDS ) {
 				// Google has not indexed the URL yet — re-submit via Indexing API to
 				// signal it is ready. This covers unknown, discovered, and crawled-but-
 				// not-indexed states, giving Google a stronger hint to prioritise it.
@@ -907,14 +933,19 @@ function dc_gi_run_watch_check_one_cron(): void {
 				}
 				return;
 			}
-			dc_gi_enqueue_url( $entry['url'], 'URL_UPDATED' );
+			// Re-enqueue only when enough time has elapsed since the last submission —
+			// prevents immediately re-populating the queue with freshly submitted URLs
+			// that Google has not yet had a chance to crawl.
+			if ( time() - (int) ( $entry['submitted_at'] ?? 0 ) > HOUR_IN_SECONDS ) {
+				dc_gi_enqueue_url( $entry['url'], 'URL_UPDATED' );
+				$entry['coverage'] = $coverage ?: 'URL is unknown to Google';
+				$entry['coverage'] .= ' (re-queued for submission)';
+			}
 			// Flag for manual QA when Google has discovered but not indexed the URL.
 			if ( 'Discovered - currently not indexed' === $coverage ) {
 				dc_gi_qa_pending_add( $entry['url'] );
 			}
-			$entry['coverage'] = $coverage ?: 'URL is unknown to Google';
-			$entry['coverage'] .= ' (re-queued for submission)';
-			$entry['status']   = 'pending';
+			$entry['status'] = 'pending';
 		} else {
 			$entry['status'] = 'pending';
 		}
