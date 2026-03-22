@@ -89,6 +89,7 @@ function dc_gi_enqueue_scripts( string $hook ): void {
 		'watchTotal'      => count( (array) get_option( 'dc_gi_watchlist', [] ) ),
 		'qaActive'        => (bool) get_option( 'dc_gi_qa_active', false ),
 		'qaOffset'        => (int) get_option( 'dc_gi_qa_offset', 0 ),
+		'qaPendingCount'  => count( (array) get_option( 'dc_gi_qa_pending', [] ) ),
 		'quotaExhausted'  => dc_gi_is_quota_exhausted(),
 		'i18n'            => [
 			'starting'          => __( 'Starting…', 'dc-google-indexing' ),
@@ -1461,6 +1462,10 @@ function dc_gi_ajax_poll_trigger(): void {
  * directives, missing title/description/H1 tags, canonical mismatches, and
  * accumulates a content hash for duplicate-content detection on the final URL.
  * Results are stored in the dc_gi_qa_results option.
+ *
+ * Sources URLs exclusively from dc_gi_qa_pending — the list populated by the
+ * Watchlist whenever it finds a URL is "Discovered - currently not indexed".
+ * The QA tab does not scan the full sitemap; that is Polling's responsibility.
  */
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
 function dc_gi_ajax_qa_scan_one(): void {
@@ -1470,11 +1475,11 @@ function dc_gi_ajax_qa_scan_one(): void {
 	}
 
 	$offset   = max( 0, (int) ( isset( $_POST['offset'] ) ? wp_unslash( $_POST['offset'] ) : 0 ) );
-	$urls     = dc_gi_get_sitemap_urls_cached();
+	$urls     = array_values( (array) get_option( 'dc_gi_qa_pending', [] ) );
 	$total    = count( $urls );
 
 	if ( empty( $urls ) ) {
-		wp_send_json_error( 'no_sitemap' );
+		wp_send_json_error( 'no_pending' );
 	}
 
 	if ( $offset >= $total ) {
@@ -1646,6 +1651,8 @@ function dc_gi_ajax_qa_scan_one(): void {
 		update_option( 'dc_gi_qa_results', $results, false );
 		delete_option( 'dc_gi_qa_active' );
 		delete_option( 'dc_gi_qa_offset' );
+		// All pending URLs have now been scanned — clear the pending list.
+		delete_option( 'dc_gi_qa_pending' );
 	} else {
 		update_option( 'dc_gi_qa_results', $results, false );
 		update_option( 'dc_gi_qa_offset', $next, false );
@@ -1683,6 +1690,7 @@ function dc_gi_handle_qa_clear(): void {
 	delete_option( 'dc_gi_qa_results' );
 	delete_option( 'dc_gi_qa_active' );
 	delete_option( 'dc_gi_qa_offset' );
+	delete_option( 'dc_gi_qa_pending' );
 	wp_safe_redirect( add_query_arg(
 		[ 'page' => 'dc-google-indexing', 'tab' => 'qa' ],
 		admin_url( 'admin.php' )
@@ -1750,6 +1758,7 @@ function dc_gi_render_page(): void {
 
 	$last_poll  = get_transient( 'dc_gi_last_poll' );
 	$qa_results = (array) get_option( 'dc_gi_qa_results', [] );
+	$qa_pending = (array) get_option( 'dc_gi_qa_pending', [] );
 
 	$notices = [
 		'saved'           => [ 'success', __( 'Settings saved.', 'dc-google-indexing' ) ],
@@ -2996,17 +3005,17 @@ function dc_gi_render_page(): void {
 
 		<h2 style="margin-top:0"><?php esc_html_e( 'Quality Assurance — On-Page SEO Checker', 'dc-google-indexing' ); ?></h2>
 		<p style="color:#555;max-width:740px">
-			<?php esc_html_e( 'Scans every URL in your XML sitemap and checks for common reasons pages are "Crawled — currently not indexed": 404 errors, noindex directives, missing title or meta description tags, missing H1 headings, non-canonical URLs, and duplicate content.', 'dc-google-indexing' ); ?>
+			<?php esc_html_e( 'Inspects URLs flagged by the Watchlist as "Discovered — currently not indexed" and checks for common on-page issues preventing indexing: 404 errors, noindex directives, missing title or meta description tags, missing H1 headings, non-canonical URLs, and duplicate content.', 'dc-google-indexing' ); ?>
 		</p>
 
 		<div class="dc-gi-info-grid" style="max-width:860px">
 			<div class="dc-gi-callout info">
-				<strong><?php esc_html_e( 'No quota used', 'dc-google-indexing' ); ?></strong><br>
-				<?php esc_html_e( 'QA scanning fetches each sitemap URL directly — it does not call the Google Inspection API, so it uses no daily inspection quota.', 'dc-google-indexing' ); ?>
+				<strong><?php esc_html_e( 'Watchlist-driven', 'dc-google-indexing' ); ?></strong><br>
+				<?php esc_html_e( 'URLs are added here automatically by the Watchlist when Google reports them as "Discovered — currently not indexed". QA does not scan the full sitemap — that is Polling\'s job.', 'dc-google-indexing' ); ?>
 			</div>
-			<div class="dc-gi-callout warn">
-				<strong><?php esc_html_e( '⚠️ Performance note', 'dc-google-indexing' ); ?></strong><br>
-				<?php esc_html_e( 'Each URL is fetched in sequence. Large sitemaps may take several minutes to scan. Results are saved after each URL so you can stop and resume at any time.', 'dc-google-indexing' ); ?>
+			<div class="dc-gi-callout info">
+				<strong><?php esc_html_e( 'No quota used', 'dc-google-indexing' ); ?></strong><br>
+				<?php esc_html_e( 'Each URL is fetched directly — no Google Inspection API calls are made, so no daily quota is consumed. Results are saved after each URL so you can stop and resume at any time.', 'dc-google-indexing' ); ?>
 			</div>
 		</div>
 
@@ -3054,6 +3063,24 @@ function dc_gi_render_page(): void {
 		];
 		?>
 
+		<?php if ( ! empty( $qa_pending ) ) : ?>
+		<div class="dc-gi-callout warn" style="margin-bottom:20px">
+			<strong><?php
+			printf(
+				/* translators: %d: number of URLs flagged by Watchlist */
+				esc_html__( '🔍 %d URL(s) flagged by Watchlist for manual QA scan', 'dc-google-indexing' ),
+				count( $qa_pending )
+			);
+			?></strong><br>
+			<span style="font-size:12px;opacity:.8"><?php esc_html_e( 'These URLs were found &quot;Discovered — currently not indexed&quot; by the Watchlist and re-queued for submission. Run a scan to investigate possible on-page issues preventing indexing.', 'dc-google-indexing' ); ?></span>
+			<ul style="margin:8px 0 4px;padding-left:20px">
+				<?php foreach ( $qa_pending as $qa_pending_url ) : ?>
+				<li style="font-size:12px"><a href="<?php echo esc_url( $qa_pending_url ); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html( $qa_pending_url ); ?></a></li>
+				<?php endforeach; ?>
+			</ul>
+		</div>
+		<?php endif; ?>
+
 		<!-- Stats row -->
 		<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px">
 			<div class="dc-gi-stat" style="min-width:110px">
@@ -3075,7 +3102,7 @@ function dc_gi_render_page(): void {
 			<span id="dc-gi-qa-badge" class="dc-gi-poll-badge stopped">
 				<span><?php esc_html_e( '○ Stopped', 'dc-google-indexing' ); ?></span>
 			</span>
-			<button id="dc-gi-qa-start-btn" class="button dc-gi-btn-start"><?php esc_html_e( '▶ Start Scan', 'dc-google-indexing' ); ?></button>
+			<button id="dc-gi-qa-start-btn" class="button dc-gi-btn-start" <?php disabled( empty( $qa_pending ) ); ?>><?php esc_html_e( '▶ Start Scan', 'dc-google-indexing' ); ?></button>
 			<button id="dc-gi-qa-stop-btn" class="button dc-gi-btn-stop" disabled><?php esc_html_e( '■ Stop', 'dc-google-indexing' ); ?></button>
 			<?php if ( ! empty( $qa_results ) ) : ?>
 			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"

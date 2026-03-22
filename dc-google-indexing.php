@@ -340,6 +340,19 @@ function dc_gi_watchlist_get(): array {
 }
 
 /**
+ * Add a URL to the QA-pending list (idempotent).
+ * Called when the Watchlist finds a URL is "Discovered - currently not indexed".
+ */
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_qa_pending_add( string $url ): void {
+	$pending = (array) get_option( 'dc_gi_qa_pending', [] );
+	if ( ! in_array( $url, $pending, true ) ) {
+		$pending[] = $url;
+		update_option( 'dc_gi_qa_pending', $pending, false );
+	}
+}
+
+/**
  * Return sitemap URLs, caching the result for 5 minutes to avoid repeated
  * network fetches during a single watchlist-check or poll-batch run.
  *
@@ -457,6 +470,10 @@ function dc_gi_run_watchlist_check(): void {
 				// signal it is ready. This covers unknown, discovered, and crawled-but-
 				// not-indexed states, giving Google a stronger hint to prioritise it.
 				dc_gi_enqueue_url( $list[ $k ]['url'], 'URL_UPDATED' );
+			}
+			// Flag for manual QA when Google has discovered but not indexed the URL.
+			if ( 'Discovered - currently not indexed' === $coverage ) {
+				dc_gi_qa_pending_add( $list[ $k ]['url'] );
 			}
 		}
 	}
@@ -875,6 +892,10 @@ function dc_gi_run_watch_check_one_cron(): void {
 				return;
 			}
 			dc_gi_enqueue_url( $entry['url'], 'URL_UPDATED' );
+			// Flag for manual QA when Google has discovered but not indexed the URL.
+			if ( 'Discovered - currently not indexed' === $coverage ) {
+				dc_gi_qa_pending_add( $entry['url'] );
+			}
 			$entry['coverage'] = $coverage ?: 'URL is unknown to Google';
 			$entry['coverage'] .= ' (re-queued for submission)';
 			$entry['status']   = 'pending';
