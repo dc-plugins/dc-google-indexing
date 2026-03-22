@@ -295,7 +295,7 @@ function dc_gi_poll_js(): string {
 		// Initial status on page load.
 		$.post(dcGiPoll.ajaxurl, {action:'dc_gi_poll_status', nonce:dcGiPoll.nonce})
 			.done(function(r){
-				console.log('[dcGi] initial status:', JSON.stringify(r));
+				console.log('[dcGi] initial status:', r);
 				if (r.success) {
 					updateUI(r.data);
 					if (r.data.active) longPoll();
@@ -577,7 +577,8 @@ function dc_gi_qa_js(): string {
 			var $b = $('#dc-gi-qa-badge');
 			$b.attr('class', 'dc-gi-poll-badge done');
 			$b.html('<span>' + dcGiPoll.i18n.qaDone + '</span>');
-			$('#dc-gi-qa-start-btn').prop('disabled', false);
+			// Pending list was cleared by the scan — keep Start disabled until new URLs are flagged.
+			$('#dc-gi-qa-start-btn').prop('disabled', true);
 			$('#dc-gi-qa-stop-btn').prop('disabled', true);
 		}
 
@@ -655,8 +656,9 @@ function dc_gi_qa_js(): string {
 				})
 				.done(function(r) {
 					if (qaStopped) return;
-					if (!r.success) {
-						$('#dc-gi-qa-prog-label').text('Error: ' + JSON.stringify(r.data));
+					if (!r || !r.success) {
+						var errMsg = (r && r.data) ? String(r.data) : 'unexpected server response';
+						$('#dc-gi-qa-prog-label').text('Error: ' + errMsg);
 						qaSetBadgeStopped();
 						return;
 					}
