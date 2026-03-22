@@ -529,9 +529,10 @@ function dc_gi_run_poll_batch( bool $force = false ): string {
 			return 'early:sitemap_error:' . $all_urls->get_error_message();
 		}
 
-		$watched_urls = array_column( dc_gi_watchlist_get(), 'url' );
-		$poll_seen    = (array) get_option( 'dc_gi_poll_seen', [] );
-		$eligible     = array_values( array_diff( $all_urls, $watched_urls ) );
+		$watched_urls      = array_column( dc_gi_watchlist_get(), 'url' );
+		$poll_seen         = (array) get_option( 'dc_gi_poll_seen', [] );
+		$poll_seen_initial = $poll_seen; // snapshot to detect mid-batch resets
+		$eligible          = array_values( array_diff( $all_urls, $watched_urls ) );
 		$candidates   = array_values( array_diff( $eligible, $poll_seen ) );
 
 		if ( empty( $candidates ) ) {
@@ -597,6 +598,21 @@ function dc_gi_run_poll_batch( bool $force = false ): string {
 		$cycle_queued     = ( $prev['cycle_queued']    ?? 0 ) + $queued;
 		$cycle_skipped    = ( $prev['cycle_skipped']   ?? 0 ) + $skipped;
 		$cycle_errors     = ( $prev['cycle_errors']    ?? 0 ) + $errors;
+
+		// Detect if a Reset Cycle happened while this batch was running.
+		// We started mid-cycle (poll_seen was non-empty), but the option has since
+		// been deleted by the reset handler — bypass object cache to verify.
+		if ( ! empty( $poll_seen_initial ) ) {
+			global $wpdb;
+			$fresh_seen = $wpdb->get_var( $wpdb->prepare(
+				"SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1",
+				'dc_gi_poll_seen'
+			) );
+			if ( null === $fresh_seen ) {
+				// Reset happened during this batch — discard stale cursor write.
+				return 'ok:reset_detected';
+			}
+		}
 
 		if ( $cycle_done ) {
 			delete_option( 'dc_gi_poll_seen' );
