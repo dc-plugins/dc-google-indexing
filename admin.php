@@ -69,6 +69,9 @@ add_action( 'wp_ajax_dc_gi_watch_resubmit_one',  'dc_gi_ajax_watch_resubmit_one'
 add_action( 'wp_ajax_dc_gi_watch_status',        'dc_gi_ajax_watch_status' );
 add_action( 'admin_post_dc_gi_watch_fix_cron',   'dc_gi_handle_watch_fix_cron' );
 add_action( 'admin_post_dc_gi_watch_clr_indexed', 'dc_gi_handle_watch_clear_indexed' );
+add_action( 'wp_ajax_dc_gi_qa_scan_one', 'dc_gi_ajax_qa_scan_one' );
+add_action( 'wp_ajax_dc_gi_qa_stop',     'dc_gi_ajax_qa_stop' );
+add_action( 'admin_post_dc_gi_qa_clear', 'dc_gi_handle_qa_clear' );
 add_action( 'admin_enqueue_scripts', 'dc_gi_enqueue_scripts' );
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
 function dc_gi_enqueue_scripts( string $hook ): void {
@@ -84,6 +87,8 @@ function dc_gi_enqueue_scripts( string $hook ): void {
 		'watchActive'     => (bool) get_option( 'dc_gi_watch_active', false ),
 		'watchOffset'     => (int) get_option( 'dc_gi_watch_offset', 0 ),
 		'watchTotal'      => count( (array) get_option( 'dc_gi_watchlist', [] ) ),
+		'qaActive'        => (bool) get_option( 'dc_gi_qa_active', false ),
+		'qaOffset'        => (int) get_option( 'dc_gi_qa_offset', 0 ),
 		'quotaExhausted'  => dc_gi_is_quota_exhausted(),
 		'i18n'            => [
 			'starting'          => __( 'Starting…', 'dc-google-indexing' ),
@@ -96,10 +101,14 @@ function dc_gi_enqueue_scripts( string $hook ): void {
 			'watchRunning'      => __( '● Running in background', 'dc-google-indexing' ),
 			'watchStopped'      => __( '○ Stopped', 'dc-google-indexing' ),
 			'watchDone'         => __( '✅ Check complete', 'dc-google-indexing' ),
+			'qaRunning'         => __( '● Scanning…', 'dc-google-indexing' ),
+			'qaStopped'         => __( '○ Stopped', 'dc-google-indexing' ),
+			'qaDone'            => __( '✅ Scan complete', 'dc-google-indexing' ),
 		],
 	] );
 	wp_add_inline_script( 'dc-gi-admin', dc_gi_poll_js() );
 	wp_add_inline_script( 'dc-gi-admin', dc_gi_watch_check_js() );
+	wp_add_inline_script( 'dc-gi-admin', dc_gi_qa_js() );
 }
 
 // Sticky admin notice when daily Indexing API quota is exhausted.
@@ -541,6 +550,231 @@ function dc_gi_watch_check_js(): string {
 			wcStart(dcGiPoll.watchOffset || 0);
 		} else {
 			setBadgeStopped();
+		}
+	});
+}(jQuery));
+JS;
+}
+
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_qa_js(): string {
+	return <<<'JS'
+(function($){
+	$(function(){
+		var qaStopped = true;
+		var qaXhr     = null;
+
+		// ── Issue label map ────────────────────────────────────────────────────
+
+		var issueLabels = {
+			fetch_error:      'Fetch Error',
+			not_found:        '404 Not Found',
+			http_error:       'HTTP Error',
+			redirect:         'Redirect',
+			noindex:          'Noindex',
+			missing_title:    'Missing Title',
+			missing_meta_desc:'Missing Meta Desc',
+			missing_h1:       'Missing H1',
+			non_canonical:    'Non-Canonical',
+			duplicate_content:'Duplicate Content'
+		};
+
+		var issueColors = {
+			fetch_error:      '#fd5d93',
+			not_found:        '#fd5d93',
+			http_error:       '#fd5d93',
+			redirect:         '#ff8d72',
+			noindex:          '#ff8d72',
+			missing_title:    '#ff8d72',
+			missing_meta_desc:'#ff8d72',
+			missing_h1:       '#7a8499',
+			non_canonical:    '#ff8d72',
+			duplicate_content:'#ff8d72'
+		};
+
+		function issueBadge(type) {
+			var label = issueLabels[type] || type;
+			var color = issueColors[type] || '#7a8499';
+			return '<span style="display:inline-block;padding:1px 7px;border-radius:9px;font-size:11px;font-weight:600;background:rgba(255,255,255,.08);color:'+color+';margin:1px 2px">' + label + '</span>';
+		}
+
+		// ── Badge helpers ──────────────────────────────────────────────────────
+
+		function qaSetBadgeRunning() {
+			var $b = $('#dc-gi-qa-badge');
+			$b.attr('class', 'dc-gi-poll-badge running');
+			$b.html('<span class="dc-gi-spinner"></span><span>' + dcGiPoll.i18n.qaRunning + '</span>');
+			$('#dc-gi-qa-start-btn').prop('disabled', true);
+			$('#dc-gi-qa-stop-btn').prop('disabled', false);
+			$('#dc-gi-qa-progress').show();
+		}
+
+		function qaSetBadgeStopped() {
+			var $b = $('#dc-gi-qa-badge');
+			$b.attr('class', 'dc-gi-poll-badge stopped');
+			$b.html('<span>' + dcGiPoll.i18n.qaStopped + '</span>');
+			$('#dc-gi-qa-start-btn').prop('disabled', false);
+			$('#dc-gi-qa-stop-btn').prop('disabled', true);
+		}
+
+		function qaSetBadgeDone() {
+			var $b = $('#dc-gi-qa-badge');
+			$b.attr('class', 'dc-gi-poll-badge done');
+			$b.html('<span>' + dcGiPoll.i18n.qaDone + '</span>');
+			$('#dc-gi-qa-start-btn').prop('disabled', false);
+			$('#dc-gi-qa-stop-btn').prop('disabled', true);
+		}
+
+		// ── Counter updates ────────────────────────────────────────────────────
+
+		var qaIssuesCount = parseInt($('#dc-gi-qa-stat-issues').text(), 10) || 0;
+		var qaCleanCount  = parseInt($('#dc-gi-qa-stat-clean').text(), 10) || 0;
+		var qaTotalCount  = parseInt($('#dc-gi-qa-stat-total').text(), 10) || 0;
+
+		function qaAddRow(url, httpStatus, issues, title) {
+			var $tbody = $('#dc-gi-qa-tbody');
+			if (!$tbody.length) return;
+			var issuesHtml = '';
+			if (issues && issues.length) {
+				for (var i = 0; i < issues.length; i++) {
+					issuesHtml += issueBadge(issues[i]);
+				}
+			} else {
+				issuesHtml = '<span style="color:#00f2c3;font-size:12px">✓ No issues</span>';
+			}
+			var statusColor = httpStatus === 200 ? '#00f2c3' : (httpStatus >= 400 ? '#fd5d93' : '#ff8d72');
+			var row = '<tr data-qa-url="' + $('<span>').text(url).html() + '">' +
+				'<td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><a href="' + $('<span>').text(url).html() + '" target="_blank" rel="noopener noreferrer">' + $('<span>').text(url).html() + '</a></td>' +
+				'<td style="color:' + statusColor + ';font-weight:600">' + (httpStatus || '—') + '</td>' +
+				'<td>' + issuesHtml + '</td>' +
+				'<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#7a8499">' + $('<span>').text(title || '—').html() + '</td>' +
+				'</tr>';
+			$tbody.prepend(row);
+
+			// Update counters.
+			qaTotalCount++;
+			$('#dc-gi-qa-stat-total').text(qaTotalCount);
+			if (issues && issues.length) {
+				qaIssuesCount++;
+				$('#dc-gi-qa-stat-issues').text(qaIssuesCount);
+			} else {
+				qaCleanCount++;
+				$('#dc-gi-qa-stat-clean').text(qaCleanCount);
+			}
+
+			// Apply active filter.
+			var filterVal = $('#dc-gi-qa-filter').val();
+			if (filterVal && filterVal !== 'all') {
+				var $lastRow = $tbody.find('tr:first');
+				var hasIssue = $lastRow.find('[data-issue="' + filterVal + '"]').length > 0;
+				var isClean  = filterVal === 'clean' && (!issues || !issues.length);
+				if (!hasIssue && !isClean) $lastRow.hide();
+			}
+		}
+
+		// ── Core scan loop ─────────────────────────────────────────────────────
+
+		function qaStart(startOffset) {
+			qaStopped = false;
+			qaSetBadgeRunning();
+			$('#dc-gi-qa-prog-label').text('Scanning\u2026');
+			$('#dc-gi-qa-prog-bar').css('width','0%').css('background','linear-gradient(90deg,#1d8cf8,#00f2c3)');
+			qaScanOne(startOffset || 0);
+		}
+
+		function qaStop() {
+			qaStopped = true;
+			if (qaXhr) { qaXhr.abort(); qaXhr = null; }
+			qaSetBadgeStopped();
+			$('#dc-gi-qa-prog-label').text('Stopped.');
+			$.post(dcGiPoll.ajaxurl, { action: 'dc_gi_qa_stop', nonce: dcGiPoll.nonce });
+		}
+
+		function qaScanOne(offset) {
+			if (qaStopped) return;
+			qaXhr = $.post(dcGiPoll.ajaxurl, {
+					action: 'dc_gi_qa_scan_one',
+					nonce:  dcGiPoll.nonce,
+					offset: offset
+				})
+				.done(function(r) {
+					if (qaStopped) return;
+					if (!r.success) {
+						$('#dc-gi-qa-prog-label').text('Error: ' + JSON.stringify(r.data));
+						qaSetBadgeStopped();
+						return;
+					}
+					var d     = r.data;
+					var total = d.total || 1;
+					var pct   = Math.round((d.offset + 1) / total * 100);
+					$('#dc-gi-qa-prog-count').text((d.offset + 1) + ' / ' + total + ' (' + pct + '%)');
+					$('#dc-gi-qa-prog-bar').css('width', pct + '%');
+					if (d.url) {
+						$('#dc-gi-qa-prog-url').text(d.url);
+						qaAddRow(d.url, d.http_status, d.issues, d.title);
+					}
+					if (d.done) {
+						$('#dc-gi-qa-prog-label').text('\u2705 Scan complete \u2014 ' + total + ' URLs checked.');
+						$('#dc-gi-qa-prog-bar').css('background','#00f2c3');
+						qaSetBadgeDone();
+					} else {
+						qaScanOne(d.next);
+					}
+				})
+				.fail(function(xhr) {
+					if (xhr.statusText === 'abort') return;
+					if (qaStopped) return;
+					setTimeout(function(){ qaScanOne(offset); }, 2000);
+				});
+		}
+
+		// ── Filter ─────────────────────────────────────────────────────────────
+
+		$('#dc-gi-qa-filter').on('change', function() {
+			var val = $(this).val();
+			$('#dc-gi-qa-tbody tr').each(function() {
+				var $row   = $(this);
+				var url    = $row.attr('data-qa-url') || '';
+				if (!url) { $row.show(); return; }
+				if (!val || val === 'all') {
+					$row.show();
+				} else if (val === 'clean') {
+					var hasAny = $row.find('span[style*="fd5d93"], span[style*="ff8d72"]').length > 0;
+					if ($row.find('span').filter(function(){ return $(this).text() === '\u2713 No issues'; }).length) {
+						$row.show();
+					} else {
+						// row has issue badges or the clean check span
+						var cleanText = $row.find('td').eq(2).text().trim();
+						$row.toggle(cleanText === '\u2713 No issues');
+					}
+				} else {
+					var issueHtml = $row.find('td').eq(2).html() || '';
+					$row.toggle(issueHtml.indexOf(issueLabels[val] || val) !== -1);
+				}
+			});
+		});
+
+		// ── Button bindings ────────────────────────────────────────────────────
+
+		$('#dc-gi-qa-start-btn').on('click', function() {
+			// Clear existing rows so the table fills fresh.
+			$('#dc-gi-qa-tbody').empty();
+			qaIssuesCount = 0; qaCleanCount = 0; qaTotalCount = 0;
+			$('#dc-gi-qa-stat-issues').text('0');
+			$('#dc-gi-qa-stat-clean').text('0');
+			$('#dc-gi-qa-stat-total').text('0');
+			qaStart(0);
+		});
+		$('#dc-gi-qa-stop-btn').on('click', qaStop);
+
+		// ── Page-load: resume if scan was in progress ──────────────────────────
+
+		if (dcGiPoll.qaActive) {
+			qaSetBadgeRunning();
+			$('#dc-gi-qa-prog-label').text('Resuming scan\u2026');
+			qaStart(dcGiPoll.qaOffset || 0);
+		} else {
+			qaSetBadgeStopped();
 		}
 	});
 }(jQuery));
@@ -1216,6 +1450,246 @@ function dc_gi_ajax_poll_trigger(): void {
 	] );
 }
 
+// =============================================================================
+// QUALITY ASSURANCE — AJAX HANDLERS
+// =============================================================================
+
+/**
+ * AJAX: Scan one sitemap URL for common on-page SEO issues.
+ *
+ * Fetches the URL via wp_remote_get(), parses the HTML response for noindex
+ * directives, missing title/description/H1 tags, canonical mismatches, and
+ * accumulates a content hash for duplicate-content detection on the final URL.
+ * Results are stored in the dc_gi_qa_results option.
+ */
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_ajax_qa_scan_one(): void {
+	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_send_json_error( 'Forbidden', 403 );
+	}
+
+	$offset   = max( 0, (int) ( isset( $_POST['offset'] ) ? wp_unslash( $_POST['offset'] ) : 0 ) );
+	$urls     = dc_gi_get_sitemap_urls_cached();
+	$total    = count( $urls );
+
+	if ( empty( $urls ) ) {
+		wp_send_json_error( 'no_sitemap' );
+	}
+
+	if ( $offset >= $total ) {
+		delete_option( 'dc_gi_qa_active' );
+		delete_option( 'dc_gi_qa_offset' );
+		wp_send_json_success( [ 'done' => true, 'total' => $total, 'offset' => $total ] );
+	}
+
+	$url = $urls[ $offset ];
+
+	// Mark active + store cursor.
+	update_option( 'dc_gi_qa_active', true, false );
+	update_option( 'dc_gi_qa_offset', $offset, false );
+
+	$issues       = [];
+	$http_status  = 0;
+	$title        = '';
+	$meta_desc    = '';
+	$h1           = '';
+	$canonical    = '';
+	$robots       = '';
+	$content_hash = '';
+
+	// Fetch the page.
+	$response = wp_remote_get(
+		$url,
+		[
+			'timeout'    => 12,
+			'user-agent' => 'Mozilla/5.0 (compatible; DC-QA-Scanner/1.0)',
+		]
+	);
+
+	if ( is_wp_error( $response ) ) {
+		$issues[] = 'fetch_error';
+	} else {
+		$http_status = (int) wp_remote_retrieve_response_code( $response );
+		$body        = wp_remote_retrieve_body( $response );
+
+		if ( 404 === $http_status ) {
+			$issues[] = 'not_found';
+		} elseif ( $http_status >= 500 ) {
+			$issues[] = 'http_error';
+		} elseif ( $http_status >= 400 ) {
+			$issues[] = 'http_error';
+		} elseif ( $http_status >= 300 ) {
+			$issues[] = 'redirect';
+		}
+
+		if ( 200 === $http_status && $body ) {
+			// X-Robots-Tag header.
+			$x_robots = wp_remote_retrieve_header( $response, 'x-robots-tag' );
+			if ( $x_robots && false !== stripos( $x_robots, 'noindex' ) ) {
+				$issues[] = 'noindex';
+				$robots   = 'noindex (header)';
+			}
+
+			// Meta robots noindex.
+			if ( ! in_array( 'noindex', $issues, true ) ) {
+				if ( preg_match(
+					'/<meta[^>]+name=["\']robots["\'][^>]+content=["\']([^"\']*)["\'][^>]*>/i',
+					$body,
+					$m
+				) || preg_match(
+					'/<meta[^>]+content=["\']([^"\']*)["\'][^>]+name=["\']robots["\'][^>]*>/i',
+					$body,
+					$m
+				) ) {
+					if ( false !== stripos( $m[1], 'noindex' ) ) {
+						$issues[] = 'noindex';
+						$robots   = 'noindex (meta)';
+					}
+				}
+			}
+
+			// Title tag.
+			if ( preg_match( '/<title[^>]*>(.*?)<\/title>/is', $body, $m ) ) {
+				$title = trim( html_entity_decode( wp_strip_all_tags( $m[1] ), ENT_QUOTES, 'UTF-8' ) );
+			}
+			if ( '' === $title ) {
+				$issues[] = 'missing_title';
+			}
+
+			// Meta description.
+			if ( preg_match(
+				'/<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']*)["\'][^>]*>/i',
+				$body,
+				$m
+			) || preg_match(
+				'/<meta[^>]+content=["\']([^"\']*)["\'][^>]+name=["\']description["\'][^>]*>/i',
+				$body,
+				$m
+			) ) {
+				$meta_desc = trim( $m[1] );
+			}
+			if ( '' === $meta_desc ) {
+				$issues[] = 'missing_meta_desc';
+			}
+
+			// H1 tag.
+			if ( preg_match( '/<h1[^>]*>(.*?)<\/h1>/is', $body, $m ) ) {
+				$h1 = trim( html_entity_decode( wp_strip_all_tags( $m[1] ), ENT_QUOTES, 'UTF-8' ) );
+			}
+			if ( '' === $h1 ) {
+				$issues[] = 'missing_h1';
+			}
+
+			// Canonical.
+			if ( preg_match(
+				'/<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']*)["\'][^>]*>/i',
+				$body,
+				$m
+			) || preg_match(
+				'/<link[^>]+href=["\']([^"\']*)["\'][^>]+rel=["\']canonical["\'][^>]*>/i',
+				$body,
+				$m
+			) ) {
+				$canonical = trim( $m[1] );
+				if ( $canonical && rtrim( $canonical, '/' ) !== rtrim( $url, '/' ) ) {
+					$issues[] = 'non_canonical';
+				}
+			}
+
+			// Content hash for duplicate detection (first 10 KB of stripped content).
+			$stripped     = (string) preg_replace( '/\s+/', ' ', wp_strip_all_tags( $body ) );
+			$content_hash = md5( substr( $stripped, 0, 10000 ) );
+		}
+	}
+
+	// Persist this URL's result.
+	$results         = (array) get_option( 'dc_gi_qa_results', [] );
+	$results[ $url ] = [
+		'url'          => $url,
+		'http_status'  => $http_status,
+		'issues'       => array_values( array_unique( $issues ) ),
+		'title'        => $title,
+		'meta_desc'    => $meta_desc,
+		'h1'           => $h1,
+		'canonical'    => $canonical,
+		'robots'       => $robots,
+		'content_hash' => $content_hash,
+		'scanned_at'   => time(),
+	];
+
+	$next = $offset + 1;
+	$done = $next >= $total;
+
+	if ( $done ) {
+		// Final pass: flag duplicate content across all scanned results.
+		$hashes = [];
+		foreach ( $results as $r_url => $data ) {
+			if ( ! empty( $data['content_hash'] ) ) {
+				$hashes[ $data['content_hash'] ][] = $r_url;
+			}
+		}
+		foreach ( $hashes as $dup_urls ) {
+			if ( count( $dup_urls ) > 1 ) {
+				foreach ( $dup_urls as $dup_url ) {
+					if ( isset( $results[ $dup_url ] ) ) {
+						if ( ! in_array( 'duplicate_content', $results[ $dup_url ]['issues'], true ) ) {
+							$results[ $dup_url ]['issues'][] = 'duplicate_content';
+						}
+						$results[ $dup_url ]['duplicate_urls'] = array_values(
+							array_filter( $dup_urls, fn( $u ) => $u !== $dup_url )
+						);
+					}
+				}
+			}
+		}
+		update_option( 'dc_gi_qa_results', $results, false );
+		delete_option( 'dc_gi_qa_active' );
+		delete_option( 'dc_gi_qa_offset' );
+	} else {
+		update_option( 'dc_gi_qa_results', $results, false );
+		update_option( 'dc_gi_qa_offset', $next, false );
+	}
+
+	wp_send_json_success( [
+		'done'        => $done,
+		'offset'      => $offset,
+		'next'        => $next,
+		'total'       => $total,
+		'url'         => $url,
+		'http_status' => $http_status,
+		'issues'      => array_values( array_unique( $issues ) ),
+		'title'       => $title,
+	] );
+}
+
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_ajax_qa_stop(): void {
+	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_send_json_error( 'Forbidden', 403 );
+	}
+	delete_option( 'dc_gi_qa_active' );
+	delete_option( 'dc_gi_qa_offset' );
+	wp_send_json_success();
+}
+
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_handle_qa_clear(): void {
+	check_admin_referer( 'dc_gi_qa_clear' );
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_die( esc_html__( 'Forbidden', 'dc-google-indexing' ) );
+	}
+	delete_option( 'dc_gi_qa_results' );
+	delete_option( 'dc_gi_qa_active' );
+	delete_option( 'dc_gi_qa_offset' );
+	wp_safe_redirect( add_query_arg(
+		[ 'page' => 'dc-google-indexing', 'tab' => 'qa' ],
+		admin_url( 'admin.php' )
+	) );
+	exit;
+}
+
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
 function dc_gi_handle_poll_reset(): void {
 	check_admin_referer( 'dc_gi_poll_reset' );
@@ -1274,7 +1748,8 @@ function dc_gi_render_page(): void {
 	// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 	$queued_count = absint( isset( $_GET['count'] ) ? wp_unslash( $_GET['count'] ) : 0 );
 
-	$last_poll = get_transient( 'dc_gi_last_poll' );
+	$last_poll  = get_transient( 'dc_gi_last_poll' );
+	$qa_results = (array) get_option( 'dc_gi_qa_results', [] );
 
 	$notices = [
 		'saved'           => [ 'success', __( 'Settings saved.', 'dc-google-indexing' ) ],
@@ -1505,6 +1980,7 @@ function dc_gi_render_page(): void {
 				'watchlist' => __( '👁 Watchlist', 'dc-google-indexing' ),
 				'polling'   => __( '📡 Polling', 'dc-google-indexing' ),
 				'log'       => __( 'Log', 'dc-google-indexing' ),
+				'qa'        => __( '🔍 Quality Assurance', 'dc-google-indexing' ),
 			];
 			foreach ( $tabs as $t => $label ) {
 				printf(
@@ -2513,6 +2989,252 @@ function dc_gi_render_page(): void {
 			</tbody>
 		</table>
 		<?php endif; ?>
+
+		<?php elseif ( 'qa' === $tab ) : ?>
+
+		<!-- ===== QUALITY ASSURANCE ===== -->
+
+		<h2 style="margin-top:0"><?php esc_html_e( 'Quality Assurance — On-Page SEO Checker', 'dc-google-indexing' ); ?></h2>
+		<p style="color:#555;max-width:740px">
+			<?php esc_html_e( 'Scans every URL in your XML sitemap and checks for common reasons pages are "Crawled — currently not indexed": 404 errors, noindex directives, missing title or meta description tags, missing H1 headings, non-canonical URLs, and duplicate content.', 'dc-google-indexing' ); ?>
+		</p>
+
+		<div class="dc-gi-info-grid" style="max-width:860px">
+			<div class="dc-gi-callout info">
+				<strong><?php esc_html_e( 'No quota used', 'dc-google-indexing' ); ?></strong><br>
+				<?php esc_html_e( 'QA scanning fetches each sitemap URL directly — it does not call the Google Inspection API, so it uses no daily inspection quota.', 'dc-google-indexing' ); ?>
+			</div>
+			<div class="dc-gi-callout warn">
+				<strong><?php esc_html_e( '⚠️ Performance note', 'dc-google-indexing' ); ?></strong><br>
+				<?php esc_html_e( 'Each URL is fetched in sequence. Large sitemaps may take several minutes to scan. Results are saved after each URL so you can stop and resume at any time.', 'dc-google-indexing' ); ?>
+			</div>
+		</div>
+
+		<?php
+		// Compute summary stats from stored results.
+		$qa_total        = count( $qa_results );
+		$qa_with_issues  = 0;
+		$qa_clean        = 0;
+		$qa_issue_counts = [];
+		foreach ( $qa_results as $qa_entry ) {
+			if ( ! empty( $qa_entry['issues'] ) ) {
+				++$qa_with_issues;
+				foreach ( $qa_entry['issues'] as $issue_type ) {
+					$qa_issue_counts[ $issue_type ] = ( $qa_issue_counts[ $issue_type ] ?? 0 ) + 1;
+				}
+			} else {
+				++$qa_clean;
+			}
+		}
+
+		$qa_issue_labels = [
+			'fetch_error'       => __( 'Fetch Error', 'dc-google-indexing' ),
+			'not_found'         => __( '404 Not Found', 'dc-google-indexing' ),
+			'http_error'        => __( 'HTTP Error', 'dc-google-indexing' ),
+			'redirect'          => __( 'Redirect', 'dc-google-indexing' ),
+			'noindex'           => __( 'Noindex', 'dc-google-indexing' ),
+			'missing_title'     => __( 'Missing Title', 'dc-google-indexing' ),
+			'missing_meta_desc' => __( 'Missing Meta Desc', 'dc-google-indexing' ),
+			'missing_h1'        => __( 'Missing H1', 'dc-google-indexing' ),
+			'non_canonical'     => __( 'Non-Canonical', 'dc-google-indexing' ),
+			'duplicate_content' => __( 'Duplicate Content', 'dc-google-indexing' ),
+		];
+
+		$qa_issue_colors = [
+			'fetch_error'       => '#fd5d93',
+			'not_found'         => '#fd5d93',
+			'http_error'        => '#fd5d93',
+			'redirect'          => '#ff8d72',
+			'noindex'           => '#ff8d72',
+			'missing_title'     => '#ff8d72',
+			'missing_meta_desc' => '#ff8d72',
+			'missing_h1'        => '#7a8499',
+			'non_canonical'     => '#ff8d72',
+			'duplicate_content' => '#ff8d72',
+		];
+		?>
+
+		<!-- Stats row -->
+		<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px">
+			<div class="dc-gi-stat" style="min-width:110px">
+				<div class="dc-gi-stat-num" id="dc-gi-qa-stat-total"><?php echo esc_html( (string) $qa_total ); ?></div>
+				<div class="dc-gi-stat-label"><?php esc_html_e( 'Scanned', 'dc-google-indexing' ); ?></div>
+			</div>
+			<div class="dc-gi-stat red" style="min-width:110px">
+				<div class="dc-gi-stat-num" id="dc-gi-qa-stat-issues"><?php echo esc_html( (string) $qa_with_issues ); ?></div>
+				<div class="dc-gi-stat-label"><?php esc_html_e( 'With Issues', 'dc-google-indexing' ); ?></div>
+			</div>
+			<div class="dc-gi-stat green" style="min-width:110px">
+				<div class="dc-gi-stat-num" id="dc-gi-qa-stat-clean"><?php echo esc_html( (string) $qa_clean ); ?></div>
+				<div class="dc-gi-stat-label"><?php esc_html_e( 'Clean', 'dc-google-indexing' ); ?></div>
+			</div>
+		</div>
+
+		<!-- Controls -->
+		<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
+			<span id="dc-gi-qa-badge" class="dc-gi-poll-badge stopped">
+				<span><?php esc_html_e( '○ Stopped', 'dc-google-indexing' ); ?></span>
+			</span>
+			<button id="dc-gi-qa-start-btn" class="button dc-gi-btn-start"><?php esc_html_e( '▶ Start Scan', 'dc-google-indexing' ); ?></button>
+			<button id="dc-gi-qa-stop-btn" class="button dc-gi-btn-stop" disabled><?php esc_html_e( '■ Stop', 'dc-google-indexing' ); ?></button>
+			<?php if ( ! empty( $qa_results ) ) : ?>
+			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"
+				onsubmit="return confirm('<?php esc_attr_e( 'Clear all QA scan results?', 'dc-google-indexing' ); ?>')">
+				<?php wp_nonce_field( 'dc_gi_qa_clear' ); ?>
+				<input type="hidden" name="action" value="dc_gi_qa_clear">
+				<button type="submit" class="button dc-gi-btn-secondary"><?php esc_html_e( '✕ Clear Results', 'dc-google-indexing' ); ?></button>
+			</form>
+			<?php endif; ?>
+		</div>
+
+		<!-- Progress panel (hidden until scan starts) -->
+		<div id="dc-gi-qa-progress" style="display:none;max-width:740px;margin-bottom:20px">
+			<div class="dc-gi-live-panel" style="padding:18px 22px">
+				<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+					<span id="dc-gi-qa-prog-label" style="font-size:13px;font-weight:600;color:#c8d0e0"><?php esc_html_e( 'Scanning…', 'dc-google-indexing' ); ?></span>
+					<span id="dc-gi-qa-prog-count" style="font-size:12px;color:#7a8499">0 / 0</span>
+				</div>
+				<div style="background:rgba(255,255,255,.07);border-radius:6px;height:8px;overflow:hidden">
+					<div id="dc-gi-qa-prog-bar" style="height:100%;width:0;background:linear-gradient(90deg,#1d8cf8,#00f2c3);border-radius:6px;transition:width .3s"></div>
+				</div>
+				<p id="dc-gi-qa-prog-url" style="font-size:11px;color:#7a8499;margin:8px 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></p>
+			</div>
+		</div>
+
+		<?php if ( ! empty( $qa_results ) || true ) : ?>
+		<!-- Filter -->
+		<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+			<label for="dc-gi-qa-filter" style="font-size:13px;color:#c8d0e0"><?php esc_html_e( 'Filter by issue:', 'dc-google-indexing' ); ?></label>
+			<select id="dc-gi-qa-filter" style="min-width:180px">
+				<option value="all"><?php esc_html_e( 'All URLs', 'dc-google-indexing' ); ?></option>
+				<option value="clean"><?php esc_html_e( '✓ No issues', 'dc-google-indexing' ); ?></option>
+				<?php foreach ( $qa_issue_labels as $issue_key => $issue_label ) : ?>
+					<?php if ( ! empty( $qa_issue_counts[ $issue_key ] ) || true ) : ?>
+					<option value="<?php echo esc_attr( $issue_key ); ?>">
+						<?php echo esc_html( $issue_label ); ?>
+						<?php if ( ! empty( $qa_issue_counts[ $issue_key ] ) ) : ?>
+							(<?php echo esc_html( (string) $qa_issue_counts[ $issue_key ] ); ?>)
+						<?php endif; ?>
+					</option>
+					<?php endif; ?>
+				<?php endforeach; ?>
+			</select>
+		</div>
+
+		<!-- Results table -->
+		<table class="widefat striped">
+			<thead>
+				<tr>
+					<th><?php esc_html_e( 'URL', 'dc-google-indexing' ); ?></th>
+					<th style="width:70px"><?php esc_html_e( 'Status', 'dc-google-indexing' ); ?></th>
+					<th><?php esc_html_e( 'Issues', 'dc-google-indexing' ); ?></th>
+					<th style="width:200px"><?php esc_html_e( 'Title', 'dc-google-indexing' ); ?></th>
+				</tr>
+			</thead>
+			<tbody id="dc-gi-qa-tbody">
+				<?php foreach ( array_reverse( $qa_results ) as $qa_entry ) :
+					$q_issues      = $qa_entry['issues'] ?? [];
+					$q_status      = (int) ( $qa_entry['http_status'] ?? 0 );
+					$q_status_color = 200 === $q_status ? '#00f2c3' : ( $q_status >= 400 ? '#fd5d93' : '#ff8d72' );
+				?>
+				<tr data-qa-url="<?php echo esc_attr( $qa_entry['url'] ); ?>">
+					<td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="<?php echo esc_attr( $qa_entry['url'] ); ?>">
+						<a href="<?php echo esc_url( $qa_entry['url'] ); ?>" target="_blank" rel="noopener noreferrer">
+							<?php echo esc_html( $qa_entry['url'] ); ?>
+						</a>
+					</td>
+					<td style="color:<?php echo esc_attr( $q_status_color ); ?>;font-weight:600">
+						<?php echo $q_status > 0 ? esc_html( (string) $q_status ) : '—'; ?>
+					</td>
+					<td>
+						<?php if ( empty( $q_issues ) ) : ?>
+							<span style="color:#00f2c3;font-size:12px">✓ <?php esc_html_e( 'No issues', 'dc-google-indexing' ); ?></span>
+						<?php else : ?>
+							<?php foreach ( $q_issues as $q_issue ) : ?>
+								<?php
+								$issue_label = $qa_issue_labels[ $q_issue ] ?? $q_issue;
+								$issue_color = $qa_issue_colors[ $q_issue ] ?? '#7a8499';
+								$tooltip     = '';
+								if ( 'non_canonical' === $q_issue && ! empty( $qa_entry['canonical'] ) ) {
+									$tooltip = esc_attr( sprintf(
+										/* translators: %s: canonical URL */
+										__( 'Canonical: %s', 'dc-google-indexing' ),
+										$qa_entry['canonical']
+									) );
+								} elseif ( 'duplicate_content' === $q_issue && ! empty( $qa_entry['duplicate_urls'] ) ) {
+									$tooltip = esc_attr( sprintf(
+										/* translators: %s: comma-separated list of duplicate URLs */
+										__( 'Matches: %s', 'dc-google-indexing' ),
+										implode( ', ', (array) $qa_entry['duplicate_urls'] )
+									) );
+								}
+								?>
+								<span style="display:inline-block;padding:1px 7px;border-radius:9px;font-size:11px;font-weight:600;background:rgba(255,255,255,.08);color:<?php echo esc_attr( $issue_color ); ?>;margin:1px 2px"
+									<?php if ( $tooltip ) : ?>title="<?php echo $tooltip; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- already esc_attr'd above ?>"<?php endif; ?>>
+									<?php echo esc_html( $issue_label ); ?>
+								</span>
+							<?php endforeach; ?>
+						<?php endif; ?>
+					</td>
+					<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#7a8499"
+						title="<?php echo esc_attr( $qa_entry['title'] ?? '' ); ?>">
+						<?php echo esc_html( $qa_entry['title'] ?: '—' ); ?>
+					</td>
+				</tr>
+				<?php endforeach; ?>
+			</tbody>
+		</table>
+		<?php endif; ?>
+
+		<!-- Common causes explanation -->
+		<hr style="margin:28px 0 20px">
+		<h3 style="margin-bottom:8px"><?php esc_html_e( 'Common Causes of "Crawled — Currently Not Indexed"', 'dc-google-indexing' ); ?></h3>
+		<div class="dc-gi-info-grid" style="max-width:860px">
+			<div>
+				<ul style="list-style:none;margin:0;padding:0">
+					<li style="padding:5px 0 5px 20px;position:relative;font-size:13px;color:#8892a4">
+						<span style="position:absolute;left:0;color:#fd5d93">✗</span>
+						<strong style="color:#c8d0e0"><?php esc_html_e( '404 / HTTP error', 'dc-google-indexing' ); ?></strong> — <?php esc_html_e( 'page returns an error; Google cannot index it.', 'dc-google-indexing' ); ?>
+					</li>
+					<li style="padding:5px 0 5px 20px;position:relative;font-size:13px;color:#8892a4">
+						<span style="position:absolute;left:0;color:#ff8d72">!</span>
+						<strong style="color:#c8d0e0"><?php esc_html_e( 'Noindex directive', 'dc-google-indexing' ); ?></strong> — <?php esc_html_e( 'meta robots or X-Robots-Tag header explicitly blocks indexing.', 'dc-google-indexing' ); ?>
+					</li>
+					<li style="padding:5px 0 5px 20px;position:relative;font-size:13px;color:#8892a4">
+						<span style="position:absolute;left:0;color:#ff8d72">!</span>
+						<strong style="color:#c8d0e0"><?php esc_html_e( 'Missing title tag', 'dc-google-indexing' ); ?></strong> — <?php esc_html_e( 'Google may deprioritise pages with no document title.', 'dc-google-indexing' ); ?>
+					</li>
+					<li style="padding:5px 0 5px 20px;position:relative;font-size:13px;color:#8892a4">
+						<span style="position:absolute;left:0;color:#ff8d72">!</span>
+						<strong style="color:#c8d0e0"><?php esc_html_e( 'Missing meta description', 'dc-google-indexing' ); ?></strong> — <?php esc_html_e( 'thin metadata signals low-quality content to Googlebot.', 'dc-google-indexing' ); ?>
+					</li>
+					<li style="padding:5px 0 5px 20px;position:relative;font-size:13px;color:#8892a4">
+						<span style="position:absolute;left:0;color:#7a8499">–</span>
+						<strong style="color:#c8d0e0"><?php esc_html_e( 'Missing H1 heading', 'dc-google-indexing' ); ?></strong> — <?php esc_html_e( 'indicates a lack of clear page structure.', 'dc-google-indexing' ); ?>
+					</li>
+				</ul>
+			</div>
+			<div>
+				<ul style="list-style:none;margin:0;padding:0">
+					<li style="padding:5px 0 5px 20px;position:relative;font-size:13px;color:#8892a4">
+						<span style="position:absolute;left:0;color:#ff8d72">!</span>
+						<strong style="color:#c8d0e0"><?php esc_html_e( 'Non-canonical URL', 'dc-google-indexing' ); ?></strong> — <?php esc_html_e( 'the page points its canonical tag to a different URL; Google indexes the canonical instead.', 'dc-google-indexing' ); ?>
+					</li>
+					<li style="padding:5px 0 5px 20px;position:relative;font-size:13px;color:#8892a4">
+						<span style="position:absolute;left:0;color:#ff8d72">!</span>
+						<strong style="color:#c8d0e0"><?php esc_html_e( 'Duplicate content', 'dc-google-indexing' ); ?></strong> — <?php esc_html_e( 'multiple URLs serve identical content; Google picks one to index and ignores the others.', 'dc-google-indexing' ); ?>
+					</li>
+					<li style="padding:5px 0 5px 20px;position:relative;font-size:13px;color:#8892a4">
+						<span style="position:absolute;left:0;color:#ff8d72">!</span>
+						<strong style="color:#c8d0e0"><?php esc_html_e( 'Redirect', 'dc-google-indexing' ); ?></strong> — <?php esc_html_e( 'URL in sitemap redirects to another page; only the final destination is indexed.', 'dc-google-indexing' ); ?>
+					</li>
+					<li style="padding:5px 0 5px 20px;position:relative;font-size:13px;color:#8892a4">
+						<span style="position:absolute;left:0;color:#7a8499">–</span>
+						<strong style="color:#c8d0e0"><?php esc_html_e( 'Thin / low-quality content', 'dc-google-indexing' ); ?></strong> — <?php esc_html_e( 'even with correct tags, pages with very little unique content may be skipped by Google.', 'dc-google-indexing' ); ?>
+					</li>
+				</ul>
+			</div>
+		</div>
 
 		<?php endif; ?>
 
