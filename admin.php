@@ -243,8 +243,9 @@ function dc_gi_poll_js(): string {
 		.done(function(r) {
 			// If user stopped while this request was in-flight, ignore the response.
 			if (stopped) { setBadgeStopped(); return; }
-			console.log('[dcGi] poll_wait response:', JSON.stringify(r));
-			if (r.success) {
+			if (typeof r === 'string') { try { r = JSON.parse(r); } catch(e) { r = null; } }
+			console.log('[dcGi] poll_wait response:', r);
+			if (r && r.success) {
 				updateUI(r.data);
 				var quotaHit = r.data.quota_exhausted || false;
 				if (r.data.active && !stopped && !quotaHit) {
@@ -278,8 +279,9 @@ function dc_gi_poll_js(): string {
 			setBadgeRunning();
 			$.post(dcGiPoll.ajaxurl, {action:'dc_gi_poll_start', nonce:dcGiPoll.nonce})
 				.done(function(r){
-					console.log('[dcGi] poll_start response:', JSON.stringify(r));
-					if (r.success) longPoll();
+					if (typeof r === 'string') { try { r = JSON.parse(r); } catch(e) { r = null; } }
+					console.log('[dcGi] poll_start response:', r);
+					if (r && r.success) longPoll();
 				});
 		});
 
@@ -415,8 +417,10 @@ function dc_gi_watch_check_js(): string {
 				})
 				.done(function(r) {
 					if (wcStopped) return;
-					if (!r.success) {
-						$('#dc-gi-wcp-label').text('Error: ' + JSON.stringify(r));
+					if (typeof r === 'string') { try { r = JSON.parse(r); } catch(e) { r = null; } }
+					if (!r || !r.success) {
+						var errMsg = (r && r.data) ? String(r.data) : 'unexpected server response';
+						$('#dc-gi-wcp-label').text('Error: ' + errMsg);
 						setBadgeStopped();
 						return;
 					}
