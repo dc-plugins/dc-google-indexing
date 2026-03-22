@@ -949,7 +949,7 @@ function dc_gi_handle_watch_clear(): void {
 	if ( ! current_user_can( 'manage_options' ) ) {
 		wp_die( esc_html__( 'Forbidden', 'dc-google-indexing' ) );
 	}
-	update_option( 'dc_gi_watchlist', [] );
+	update_option( 'dc_gi_watchlist', [], false );
 	wp_safe_redirect( add_query_arg(
 		[ 'page' => 'dc-google-indexing', 'tab' => 'watchlist', 'notice' => 'watch_cleared' ],
 		admin_url( 'admin.php' )
@@ -966,7 +966,7 @@ function dc_gi_handle_watch_clear_indexed(): void {
 	$list     = get_option( 'dc_gi_watchlist', [] );
 	$filtered = array_values( array_filter( $list, fn( $e ) => 'indexed' !== $e['status'] ) );
 	$removed  = count( $list ) - count( $filtered );
-	update_option( 'dc_gi_watchlist', $filtered );
+	update_option( 'dc_gi_watchlist', $filtered, false );
 	wp_safe_redirect( add_query_arg(
 		[ 'page' => 'dc-google-indexing', 'tab' => 'watchlist', 'notice' => 'watch_indexed_cleared', 'count' => $removed ],
 		admin_url( 'admin.php' )
@@ -1115,12 +1115,17 @@ function dc_gi_ajax_watch_check_one(): void {
 				$total = count( $keys );
 				update_option( 'dc_gi_watchlist', $list, false );
 			} else {
-				// Google has not indexed the URL yet — re-submit via Indexing API to
-				// signal it is ready (covers unknown, discovered, and crawled states).
-				dc_gi_enqueue_url( $entry_url, 'URL_UPDATED' );
-				$entry['coverage'] = $coverage ?: 'URL is unknown to Google';
-				$entry['coverage'] .= ' (re-queued for submission)';
-				$entry['status']   = 'pending';
+				// Re-enqueue only when enough time has elapsed since the last submission —
+				// prevents immediately re-populating the queue with freshly submitted URLs
+				// that Google has not yet had a chance to crawl.
+				if ( time() - (int) ( $entry['submitted_at'] ?? 0 ) > HOUR_IN_SECONDS ) {
+					// Google has not indexed the URL yet — re-submit via Indexing API to
+					// signal it is ready (covers unknown, discovered, and crawled states).
+					dc_gi_enqueue_url( $entry_url, 'URL_UPDATED' );
+					$entry['coverage'] = $coverage ?: 'URL is unknown to Google';
+					$entry['coverage'] .= ' (re-queued for submission)';
+				}
+				$entry['status'] = 'pending';
 			}
 		} else {
 			$entry['status'] = 'pending';
