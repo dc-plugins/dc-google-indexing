@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 /**
  * Admin interface for DC Google Indexing.
  *
@@ -52,6 +52,7 @@ add_action( 'admin_post_dc_gi_runnow',     'dc_gi_handle_runnow' );
 add_action( 'admin_post_dc_gi_clrqueue',   'dc_gi_handle_clear_queue' );
 add_action( 'admin_post_dc_gi_clrlog',     'dc_gi_handle_clear_log' );
 add_action( 'admin_post_dc_gi_poll_reset', 'dc_gi_handle_poll_reset' );
+add_action( 'admin_post_dc_gi_cache_clear', 'dc_gi_handle_cache_clear' );
 add_action( 'admin_post_dc_gi_watch_del',  'dc_gi_handle_watch_delete' );
 add_action( 'admin_post_dc_gi_watch_clr',  'dc_gi_handle_watch_clear' );
 add_action( 'admin_post_dc_gi_watch_now',  'dc_gi_handle_watch_check_now' );
@@ -66,9 +67,10 @@ add_action( 'wp_ajax_dc_gi_watch_resubmit_one',  'dc_gi_ajax_watch_resubmit_one'
 add_action( 'wp_ajax_dc_gi_watch_status',        'dc_gi_ajax_watch_status' );
 add_action( 'admin_post_dc_gi_watch_fix_cron',   'dc_gi_handle_watch_fix_cron' );
 add_action( 'admin_post_dc_gi_watch_clr_indexed', 'dc_gi_handle_watch_clear_indexed' );
-add_action( 'wp_ajax_dc_gi_qa_scan_one', 'dc_gi_ajax_qa_scan_one' );
-add_action( 'wp_ajax_dc_gi_qa_stop',     'dc_gi_ajax_qa_stop' );
-add_action( 'admin_post_dc_gi_qa_clear', 'dc_gi_handle_qa_clear' );
+add_action( 'wp_ajax_dc_gi_qa_scan_one',   'dc_gi_ajax_qa_scan_one' );
+add_action( 'wp_ajax_dc_gi_qa_stop',       'dc_gi_ajax_qa_stop' );
+add_action( 'admin_post_dc_gi_qa_clear',   'dc_gi_handle_qa_clear' );
+add_action( 'wp_ajax_dc_gi_index_status',  'dc_gi_ajax_index_status' );
 add_action( 'admin_enqueue_scripts', 'dc_gi_enqueue_scripts' );
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
 function dc_gi_enqueue_scripts( string $hook ): void {
@@ -161,6 +163,8 @@ function dc_gi_poll_js(): string {
 		var p             = pct(seen, total);
 		var quotaUsed     = data.quota_used  != null ? data.quota_used  : null;
 		var quotaLimit    = data.quota_limit != null ? data.quota_limit : null;
+		var cacheTotal    = data.cache_total    != null ? data.cache_total    : null;
+		var cacheExcluded = data.cache_excluded != null ? data.cache_excluded : null;
 
 		if (lp.time) lastTs = lp.time;
 
@@ -194,8 +198,8 @@ function dc_gi_poll_js(): string {
 			var d  = new Date(lp.time * 1000);
 			var ts = d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
 			$('#dc-gi-batch-time').text(ts);
-			// Show cycle-wide cumulative totals, falling back to per-batch for first batch
-			$('#dc-gi-batch-inspected').text(lp.cycle_inspected != null ? lp.cycle_inspected : (lp.inspected || 0));
+			// "From cache" counter: cycle_inspected is repurposed as cycle_seen (URLs read from cache)
+			$('#dc-gi-batch-inspected').text(lp.cycle_inspected != null ? lp.cycle_inspected : (lp.cycle_seen || seen || 0));
 			$('#dc-gi-batch-queued').text(lp.cycle_queued != null ? lp.cycle_queued : (lp.queued || 0));
 			$('#dc-gi-batch-skipped').text(lp.cycle_skipped != null ? lp.cycle_skipped : (lp.skipped || 0));
 			var errEl = $('#dc-gi-batch-errors');
@@ -212,6 +216,11 @@ function dc_gi_poll_js(): string {
 		// Update live quota display if present.
 		if (quotaUsed !== null && quotaLimit !== null) {
 			$('#dc-gi-quota-live').text(quotaUsed + ' / ' + quotaLimit);
+		}
+		// Update cache stats if included in the response.
+		if (cacheTotal !== null && cacheExcluded !== null) {
+			$('#dc-gi-cache-stat-total').text(cacheTotal);
+			$('#dc-gi-cache-stat-excl').text(cacheExcluded);
 		}
 		$('#dc-gi-start-btn').prop('disabled', active || done || quotaHit).text('\u25b6 Start Polling');
 		$('#dc-gi-stop-btn').prop('disabled', !active || quotaHit);
@@ -1354,6 +1363,9 @@ function dc_gi_poll_status_data(): array {
 		'quota_used'       => $quota_used,
 		'quota_limit'      => $quota_limit,
 		'quota_exhausted'  => $quota_used >= $quota_limit,
+		'cache_total'      => DC_GI_URL_Cache::count_total(),
+		'cache_excluded'   => DC_GI_URL_Cache::count_excluded(),
+		'cache_age_days'   => DC_GI_URL_Cache::oldest_entry_age_days(),
 	];
 }
 
@@ -1718,6 +1730,20 @@ function dc_gi_handle_qa_clear(): void {
 }
 
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_ajax_index_status(): void {
+	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_send_json_error( 'Forbidden', 403 );
+	}
+	wp_send_json_success( [
+		'verdicts' => DC_GI_URL_Cache::get_verdict_counts(),
+		'coverage' => DC_GI_URL_Cache::get_coverage_state_breakdown(),
+		'total'    => DC_GI_URL_Cache::count_total(),
+		'age_days' => DC_GI_URL_Cache::oldest_entry_age_days(),
+	] );
+}
+
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
 function dc_gi_handle_poll_reset(): void {
 	check_admin_referer( 'dc_gi_poll_reset' );
 	if ( ! current_user_can( 'manage_options' ) ) {
@@ -1738,6 +1764,22 @@ function dc_gi_handle_poll_reset(): void {
 
 	wp_safe_redirect( add_query_arg(
 		[ 'page' => 'dc-google-indexing', 'tab' => 'polling', 'notice' => 'poll_reset' ],
+		admin_url( 'admin.php' )
+	) );
+	exit;
+}
+
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_handle_cache_clear(): void {
+	check_admin_referer( 'dc_gi_cache_clear' );
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_die( esc_html__( 'Forbidden', 'dc-google-indexing' ) );
+	}
+
+	DC_GI_URL_Cache::truncate();
+
+	wp_safe_redirect( add_query_arg(
+		[ 'page' => 'dc-google-indexing', 'tab' => 'polling', 'notice' => 'cache_cleared' ],
 		admin_url( 'admin.php' )
 	) );
 	exit;
@@ -1806,6 +1848,7 @@ function dc_gi_render_page(): void {
 		'watch_checked'   => [ 'success', __( 'Watchlist check complete.', 'dc-google-indexing' ) ],
 		'cron_fixed'      => [ 'success', __( 'Watchlist auto-check schedule restored.', 'dc-google-indexing' ) ],
 		'poll_reset'      => [ 'success', __( 'Poll cycle reset — next run will start from the beginning of the sitemap.', 'dc-google-indexing' ) ],
+		'cache_cleared'   => [ 'success', __( 'Inspection cache cleared — the background cron will rebuild it automatically.', 'dc-google-indexing' ) ],
 	];
 
 	$all_post_types = get_post_types( [ 'public' => true ], 'objects' );
@@ -2011,6 +2054,7 @@ function dc_gi_render_page(): void {
 				'polling'   => __( '📡 Polling', 'dc-google-indexing' ),
 				'log'       => __( 'Log', 'dc-google-indexing' ),
 				'qa'        => __( '🔍 Quality Assurance', 'dc-google-indexing' ),
+				'index_status' => __( '📊 Index Status', 'dc-google-indexing' ),
 			];
 			foreach ( $tabs as $t => $label ) {
 				printf(
@@ -2805,11 +2849,63 @@ function dc_gi_render_page(): void {
 		<div class="dc-gi-info-grid">
 			<div class="dc-gi-callout info">
 				<strong><?php esc_html_e( 'How it works', 'dc-google-indexing' ); ?></strong><br>
-				<?php esc_html_e( 'Polling fetches your XML sitemap, then calls the Google URL Inspection API for each URL to check its current index status. URLs known to Google but not yet indexed are automatically added to the submission queue.', 'dc-google-indexing' ); ?>
+				<?php esc_html_e( 'A background inspection cron crawls your sitemap 3 URLs/minute via the Google URL Inspection API and builds a local cache of index statuses. The poll loop reads this cache to find URLs that are not yet indexed and queues them for submission — without calling the Inspection API itself.', 'dc-google-indexing' ); ?>
 			</div>
 			<div class="dc-gi-callout warn">
-				<strong><?php esc_html_e( '⚠️ Use sparingly', 'dc-google-indexing' ); ?></strong><br>
-				<?php esc_html_e( 'Each URL consumes 1 inspection (quota: 2,000/day). Qualifying URLs are then submitted against the Indexing API quota (200/day). Large sitemaps can exhaust both limits quickly.', 'dc-google-indexing' ); ?>
+				<strong><?php esc_html_e( '⚠️ Inspection quota', 'dc-google-indexing' ); ?></strong><br>
+				<?php esc_html_e( 'The background inspection cron uses up to 3 × 60 × 24 = 4,320 Inspection API calls/day to keep the cache fresh. Only actual submissions draw against the Indexing API quota (200/day). Polling itself makes no API calls.', 'dc-google-indexing' ); ?>
+			</div>
+		</div>
+
+		<?php
+		$cache_total    = DC_GI_URL_Cache::count_total();
+		$cache_excluded = DC_GI_URL_Cache::count_excluded();
+		$cache_age      = DC_GI_URL_Cache::oldest_entry_age_days();
+		?>
+		<div class="dc-gi-callout" style="background:#1a1f38;border-color:#2a3055;margin-bottom:16px;display:flex;align-items:center;gap:32px;flex-wrap:wrap">
+			<div>
+				<span style="font-size:11px;color:#7a8499;display:block;margin-bottom:2px"><?php esc_html_e( 'Inspection cache', 'dc-google-indexing' ); ?></span>
+				<strong style="color:#c8d0e0">
+					<?php
+					if ( 0 === $cache_total ) {
+						esc_html_e( 'Empty — background cron is building it', 'dc-google-indexing' );
+					} else {
+						echo esc_html(
+							sprintf(
+								/* translators: 1: total cached URLs, 2: excluded URL count */
+								__( '%1$d cached · %2$d need submission', 'dc-google-indexing' ),
+								$cache_total,
+								$cache_excluded
+							)
+						);
+					}
+					?>
+				</strong>
+			</div>
+			<?php if ( null !== $cache_age ) : ?>
+			<div>
+				<span style="font-size:11px;color:#7a8499;display:block;margin-bottom:2px"><?php esc_html_e( 'Oldest entry', 'dc-google-indexing' ); ?></span>
+				<strong style="color:#c8d0e0" id="dc-gi-cache-age">
+					<?php
+					echo esc_html(
+						sprintf(
+							/* translators: %d: number of days */
+							_n( '%d day ago', '%d days ago', $cache_age, 'dc-google-indexing' ),
+							$cache_age
+						)
+					);
+					?>
+				</strong>
+			</div>
+			<?php endif; ?>
+			<div style="margin-left:auto">
+				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin:0">
+					<?php wp_nonce_field( 'dc_gi_cache_clear' ); ?>
+					<input type="hidden" name="action" value="dc_gi_cache_clear">
+					<button type="submit" class="button button-small"
+						onclick="return confirm('<?php esc_attr_e( 'Clear the inspection cache? The background cron will rebuild it automatically.', 'dc-google-indexing' ); ?>')"
+					><?php esc_html_e( '🗑 Clear Cache', 'dc-google-indexing' ); ?></button>
+				</form>
 			</div>
 		</div>
 
@@ -2888,7 +2984,7 @@ function dc_gi_render_page(): void {
 				<div class="dc-gi-live-stats">
 					<div class="dc-gi-live-stat">
 						<div class="dc-gi-live-stat-num" id="dc-gi-batch-inspected"><?php echo esc_html( (string) $php_inspected ); ?></div>
-						<div class="dc-gi-live-stat-label"><?php esc_html_e( 'Inspected', 'dc-google-indexing' ); ?></div>
+						<div class="dc-gi-live-stat-label"><?php esc_html_e( 'From cache', 'dc-google-indexing' ); ?></div>
 					</div>
 					<div class="dc-gi-live-stat green">
 						<div class="dc-gi-live-stat-num" id="dc-gi-batch-queued"><?php echo esc_html( (string) $php_queued ); ?></div>
@@ -2906,7 +3002,7 @@ function dc_gi_render_page(): void {
 			</div>
 
 			<p style="font-size:11px;color:#7a8499;margin:16px 0 0;padding-top:14px;border-top:1px solid rgba(45,53,85,.5)">
-				<?php esc_html_e( '5 URLs per batch · runs every 1 minute via WP-Cron · continues if you leave this page', 'dc-google-indexing' ); ?>&ensp;|&ensp;<?php esc_html_e( 'Queue:', 'dc-google-indexing' ); ?> <strong style="color:#c8d0e0" id="dc-gi-queue-count">—</strong>
+				<?php esc_html_e( '50 URLs per batch · runs every 1 minute via WP-Cron · continues if you leave this page', 'dc-google-indexing' ); ?>&ensp;|&ensp;<?php esc_html_e( 'Queue:', 'dc-google-indexing' ); ?> <strong style="color:#c8d0e0" id="dc-gi-queue-count">—</strong>
 				&ensp;|&ensp;<?php esc_html_e( 'Quota today:', 'dc-google-indexing' ); ?> <strong style="color:<?php echo esc_attr( dc_gi_is_quota_exhausted() ? '#fd5d93' : '#c8d0e0' ); ?>" id="dc-gi-quota-live"><?php echo esc_html( $quota_used . ' / ' . $quota_limit ); ?></strong>
 			</p>
 		</div>
@@ -3327,6 +3423,274 @@ function dc_gi_render_page(): void {
 				</ul>
 			</div>
 		</div>
+
+
+		<?php elseif ( 'index_status' === $tab ) : ?>
+
+		<!-- ===== INDEX STATUS ===== -->
+
+		<h2 style="margin-top:0"><?php esc_html_e( 'Index Status Overview', 'dc-google-indexing' ); ?></h2>
+		<p style="color:#8892a4;max-width:720px;font-size:13px;margin-bottom:20px"><?php esc_html_e( 'Live snapshot of all URLs in the inspection cache, grouped by coverage state and index verdict. The stat cards auto-refresh every 30 seconds.', 'dc-google-indexing' ); ?></p>
+
+		<?php
+		$is_counts   = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::get_verdict_counts()          : [];
+		$is_coverage = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::get_coverage_state_breakdown() : [];
+		$is_total    = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::count_total()                  : 0;
+		$is_pass     = (int) ( $is_counts['PASS']                ?? 0 );
+		$is_fail     = (int) ( $is_counts['FAIL']                ?? 0 );
+		$is_neutral  = (int) ( $is_counts['NEUTRAL']             ?? 0 );
+		$is_unspec   = (int) ( $is_counts['VERDICT_UNSPECIFIED'] ?? 0 );
+		$is_excl     = $is_neutral + $is_unspec;
+		$is_age      = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::oldest_entry_age_days() : null;
+		$is_ccolors  = [
+			'Submitted and indexed'                                 => '#00f2c3',
+			'Indexed, though not submitted in sitemap'              => '#00c9a7',
+			'URL is unknown to Google'                              => '#1d8cf8',
+			'Discovered - currently not indexed'                    => '#9b5fe0',
+			'Crawled - currently not indexed'                       => '#ff8d72',
+			'Page with redirect'                                    => '#ffa500',
+			'Blocked by robots.txt'                                 => '#fd5d93',
+			'Not found (404)'                                       => '#fd5d93',
+			'Soft 404'                                              => '#fd5d93',
+			'Duplicate without user-selected canonical'             => '#ff8d72',
+			'Canonical: other'                                      => '#ff8d72',
+			'Alternate page with proper canonical tag'              => '#7a8499',
+			'Duplicate, Google chose different canonical than user' => '#7a8499',
+		];
+		?>
+
+		<!-- Stat cards -->
+		<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:24px">
+			<div class="dc-gi-stat" id="is-stat-total">
+				<div class="dc-gi-stat-num"><?php echo esc_html( (string) $is_total ); ?></div>
+				<div class="dc-gi-stat-label"><?php esc_html_e( 'Total Cached', 'dc-google-indexing' ); ?></div>
+			</div>
+			<div class="dc-gi-stat green" id="is-stat-pass">
+				<div class="dc-gi-stat-num"><?php echo esc_html( (string) $is_pass ); ?></div>
+				<div class="dc-gi-stat-label"><?php esc_html_e( 'Pass / Indexed', 'dc-google-indexing' ); ?></div>
+			</div>
+			<div class="dc-gi-stat amber" id="is-stat-excluded">
+				<div class="dc-gi-stat-num"><?php echo esc_html( (string) $is_excl ); ?></div>
+				<div class="dc-gi-stat-label"><?php esc_html_e( 'Need Submission', 'dc-google-indexing' ); ?></div>
+			</div>
+			<div class="dc-gi-stat red" id="is-stat-fail">
+				<div class="dc-gi-stat-num"><?php echo esc_html( (string) $is_fail ); ?></div>
+				<div class="dc-gi-stat-label"><?php esc_html_e( 'Fail', 'dc-google-indexing' ); ?></div>
+			</div>
+			<div class="dc-gi-stat" id="is-stat-age">
+				<div class="dc-gi-stat-num"><?php echo null !== $is_age ? esc_html( (string) $is_age ) : '&mdash;'; ?></div>
+				<div class="dc-gi-stat-label"><?php esc_html_e( 'Oldest Entry (days)', 'dc-google-indexing' ); ?></div>
+			</div>
+		</div>
+
+		<?php if ( $is_total > 0 ) : ?>
+		<!-- Two-column: coverage bars + verdict donut -->
+		<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;max-width:940px;margin-bottom:28px">
+
+			<!-- LEFT: Coverage state bars -->
+			<div class="dc-gi-live-panel" style="padding:20px 22px">
+				<h3 style="margin:0 0 16px;font-size:14px;color:#c8d0e0"><?php esc_html_e( 'Coverage States', 'dc-google-indexing' ); ?></h3>
+				<?php foreach ( $is_coverage as $is_row ) :
+					$is_state = (string) $is_row['coverage_state'];
+					$is_cnt   = (int) $is_row['count'];
+					$is_pct   = $is_total > 0 ? (int) round( $is_cnt / $is_total * 100 ) : 0;
+					$is_col   = $is_ccolors[ $is_state ] ?? '#7a8499';
+				?>
+				<div style="margin-bottom:12px">
+					<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
+						<span style="font-size:12px;color:#c8d0e0;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="<?php echo esc_attr( $is_state ); ?>"><?php echo esc_html( $is_state ); ?></span>
+						<span style="font-size:12px;color:#7a8499;white-space:nowrap;margin-left:8px"><?php echo esc_html( (string) $is_cnt . ' (' . (string) $is_pct . '%)' ); ?></span>
+					</div>
+					<div style="background:rgba(255,255,255,.07);border-radius:4px;height:7px;overflow:hidden">
+						<div style="height:100%;width:<?php echo esc_attr( (string) min( 100, $is_pct ) ); ?>%;background:<?php echo esc_attr( $is_col ); ?>;border-radius:4px;transition:width .4s"></div>
+					</div>
+				</div>
+				<?php endforeach; ?>
+			</div>
+
+			<!-- RIGHT: Verdict donut chart (pure SVG) -->
+			<div class="dc-gi-live-panel" style="padding:20px 22px">
+				<h3 style="margin:0 0 16px;font-size:14px;color:#c8d0e0"><?php esc_html_e( 'Index Verdict', 'dc-google-indexing' ); ?></h3>
+				<?php
+				$is_segs = [
+					'PASS'                => [ 'label' => __( 'Pass',             'dc-google-indexing' ), 'color' => '#00f2c3' ],
+					'NEUTRAL'             => [ 'label' => __( 'Excluded/Neutral', 'dc-google-indexing' ), 'color' => '#ff8d72' ],
+					'FAIL'                => [ 'label' => __( 'Fail',             'dc-google-indexing' ), 'color' => '#fd5d93' ],
+					'VERDICT_UNSPECIFIED' => [ 'label' => __( 'Unspecified',      'dc-google-indexing' ), 'color' => '#6e7a90' ],
+				];
+				$is_dtotal  = max( 1, (int) array_sum( $is_counts ) );
+				$is_r       = 70;
+				$is_sw      = 28;
+				$is_circ    = 2.0 * M_PI * $is_r;
+				$is_off_acc = $is_circ / 4.0; // start at 12 o'clock
+				$is_paths   = [];
+				foreach ( $is_segs as $is_v => $is_seg ) {
+					$is_vcnt    = (int) ( $is_counts[ $is_v ] ?? 0 );
+					$is_dash    = ( $is_vcnt / $is_dtotal ) * $is_circ;
+					$is_paths[] = [
+						'color'  => $is_seg['color'],
+						'label'  => $is_seg['label'],
+						'count'  => $is_vcnt,
+						'dash'   => $is_dash,
+						'gap'    => $is_circ - $is_dash,
+						'offset' => $is_off_acc,
+					];
+					$is_off_acc -= $is_dash;
+				}
+				?>
+				<div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+					<svg width="200" height="200" viewBox="0 0 200 200" style="flex-shrink:0" aria-hidden="true">
+						<circle cx="100" cy="100" r="<?php echo esc_attr( (string) $is_r ); ?>"
+							fill="none" stroke="rgba(255,255,255,.06)" stroke-width="<?php echo esc_attr( (string) $is_sw ); ?>"/>
+						<?php foreach ( $is_paths as $is_path ) :
+							if ( 0 === $is_path['count'] ) {
+								continue;
+							}
+						?>
+						<circle cx="100" cy="100" r="<?php echo esc_attr( (string) $is_r ); ?>"
+							fill="none"
+							stroke="<?php echo esc_attr( $is_path['color'] ); ?>"
+							stroke-width="<?php echo esc_attr( (string) $is_sw ); ?>"
+							stroke-dasharray="<?php echo esc_attr( number_format( $is_path['dash'], 3, '.', '' ) . ' ' . number_format( $is_path['gap'], 3, '.', '' ) ); ?>"
+							stroke-dashoffset="<?php echo esc_attr( number_format( $is_path['offset'], 3, '.', '' ) ); ?>"/>
+						<?php endforeach; ?>
+						<text x="100" y="96" text-anchor="middle" fill="#c8d0e0" font-size="28" font-weight="700" font-family="sans-serif"><?php echo esc_html( (string) $is_total ); ?></text>
+						<text x="100" y="114" text-anchor="middle" fill="#7a8499" font-size="11" font-family="sans-serif"><?php esc_html_e( 'URLs', 'dc-google-indexing' ); ?></text>
+					</svg>
+					<div>
+						<?php foreach ( $is_segs as $is_v => $is_seg ) : ?>
+						<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+							<span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:<?php echo esc_attr( $is_seg['color'] ); ?>;flex-shrink:0"></span>
+							<span style="font-size:13px;color:#c8d0e0"><?php echo esc_html( $is_seg['label'] ); ?></span>
+							<span style="font-size:13px;color:#7a8499;margin-left:4px"><?php echo esc_html( (string) (int) ( $is_counts[ $is_v ] ?? 0 ) ); ?></span>
+						</div>
+						<?php endforeach; ?>
+					</div>
+				</div>
+			</div>
+
+		</div><!-- /two-column grid -->
+
+		<!-- Sortable coverage breakdown table -->
+		<h3 style="font-size:14px;color:#c8d0e0;margin:0 0 10px"><?php esc_html_e( 'Coverage Breakdown', 'dc-google-indexing' ); ?></h3>
+		<div style="overflow-x:auto;max-width:940px;margin-bottom:24px">
+			<table class="widefat striped" id="dc-gi-is-tbl">
+				<thead>
+					<tr>
+						<th class="dc-gi-is-th" data-col="0" style="cursor:pointer;min-width:260px"><?php esc_html_e( 'Coverage State', 'dc-google-indexing' ); ?> <span class="dc-gi-is-arr">↕</span></th>
+						<th class="dc-gi-is-th" data-col="1" style="cursor:pointer;width:70px"><?php esc_html_e( 'URLs', 'dc-google-indexing' ); ?> <span class="dc-gi-is-arr">↓</span></th>
+						<th style="width:200px"><?php esc_html_e( '% of Total', 'dc-google-indexing' ); ?></th>
+					</tr>
+				</thead>
+				<tbody>
+					<?php foreach ( $is_coverage as $is_row ) :
+						$is_state   = (string) $is_row['coverage_state'];
+						$is_cnt     = (int) $is_row['count'];
+						$is_pct_f   = $is_total > 0 ? round( $is_cnt / $is_total * 100, 1 ) : 0.0;
+						$is_col     = $is_ccolors[ $is_state ] ?? '#7a8499';
+					?>
+					<tr>
+						<td style="color:#c8d0e0"><?php echo esc_html( $is_state ); ?></td>
+						<td style="color:#c8d0e0;font-weight:600" data-n="<?php echo esc_attr( (string) $is_cnt ); ?>"><?php echo esc_html( (string) $is_cnt ); ?></td>
+						<td>
+							<div style="display:flex;align-items:center;gap:8px">
+								<div style="flex:1;background:rgba(255,255,255,.07);border-radius:4px;height:6px;overflow:hidden">
+									<div style="height:100%;width:<?php echo esc_attr( (string) min( 100.0, $is_pct_f ) ); ?>%;background:<?php echo esc_attr( $is_col ); ?>;border-radius:4px"></div>
+								</div>
+								<span style="font-size:12px;color:#7a8499;min-width:44px;text-align:right"><?php echo esc_html( (string) $is_pct_f ); ?>%</span>
+							</div>
+						</td>
+					</tr>
+					<?php endforeach; ?>
+				</tbody>
+			</table>
+		</div>
+
+		<?php endif; /* $is_total > 0 */ ?>
+
+		<?php if ( 0 === $is_total ) : ?>
+		<div class="dc-gi-callout info" style="max-width:740px">
+			<strong><?php esc_html_e( 'Cache is empty', 'dc-google-indexing' ); ?></strong><br>
+			<?php esc_html_e( 'The inspection cache has no data yet. The background cron inspects URLs from the sitemap at a rate of 3 URLs per minute (no quota used). Check back in a few minutes.', 'dc-google-indexing' ); ?>
+		</div>
+		<?php endif; ?>
+
+		<!-- Refresh controls -->
+		<div style="display:flex;align-items:center;gap:12px;margin-top:16px;flex-wrap:wrap">
+			<button id="dc-gi-is-refresh" class="button dc-gi-btn-secondary" onclick="location.reload()"><?php esc_html_e( '&#8635; Refresh', 'dc-google-indexing' ); ?></button>
+			<span id="dc-gi-is-ts" style="font-size:12px;color:#7a8499"></span>
+			<label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#7a8499;cursor:pointer">
+				<input type="checkbox" id="dc-gi-is-auto" checked style="cursor:pointer">
+				<?php esc_html_e( 'Auto-refresh stats every 30 s', 'dc-google-indexing' ); ?>
+			</label>
+		</div>
+
+		<script>
+		/* global jQuery */
+		(function () {
+			'use strict';
+			var nonce   = <?php echo wp_json_encode( wp_create_nonce( 'dc_gi_ajax' ) ); ?>;
+			var ajaxUrl = <?php echo wp_json_encode( admin_url( 'admin-ajax.php' ) ); ?>;
+			var timer   = null;
+
+			function setNum( id, val ) {
+				var el = document.querySelector( '#' + id + ' .dc-gi-stat-num' );
+				if ( el ) { el.textContent = val; }
+			}
+
+			function doRefresh() {
+				jQuery.post( ajaxUrl, { action: 'dc_gi_index_status', nonce: nonce }, function ( resp ) {
+					if ( ! resp || ! resp.success ) { return; }
+					var d = resp.data, v = d.verdicts || {};
+					setNum( 'is-stat-total',    d.total );
+					setNum( 'is-stat-pass',     v['PASS'] || 0 );
+					setNum( 'is-stat-excluded', ( v['NEUTRAL'] || 0 ) + ( v['VERDICT_UNSPECIFIED'] || 0 ) );
+					setNum( 'is-stat-fail',     v['FAIL'] || 0 );
+					setNum( 'is-stat-age',      null != d.age_days ? d.age_days : '\u2014' );
+					var ts = document.getElementById( 'dc-gi-is-ts' );
+					if ( ts ) { ts.textContent = <?php echo wp_json_encode( __( 'Updated:', 'dc-google-indexing' ) ); ?> + ' ' + new Date().toLocaleTimeString(); }
+				} );
+			}
+
+			function scheduleAuto() {
+				clearInterval( timer );
+				if ( document.getElementById( 'dc-gi-is-auto' ).checked ) {
+					timer = setInterval( doRefresh, 30000 );
+				}
+			}
+
+			document.getElementById( 'dc-gi-is-auto' ).addEventListener( 'change', scheduleAuto );
+			scheduleAuto();
+
+			// Client-side sort for coverage table.
+			var tbl = document.getElementById( 'dc-gi-is-tbl' );
+			if ( tbl ) {
+				var sortDir = {};
+				tbl.querySelectorAll( 'th.dc-gi-is-th' ).forEach( function ( th ) {
+					th.addEventListener( 'click', function () {
+						var col   = parseInt( th.dataset.col, 10 );
+						sortDir[col] = ! sortDir[col];
+						var tbody = tbl.querySelector( 'tbody' );
+						var rows  = Array.from( tbody.rows );
+						rows.sort( function ( a, b ) {
+							var ac = a.cells[col], bc = b.cells[col];
+							var av = ( ac.dataset.n !== undefined ) ? parseFloat( ac.dataset.n ) : NaN;
+							var bv = ( bc.dataset.n !== undefined ) ? parseFloat( bc.dataset.n ) : NaN;
+							if ( ! isNaN( av ) && ! isNaN( bv ) ) {
+								return sortDir[col] ? av - bv : bv - av;
+							}
+							var at = ac.textContent.trim(), bt = bc.textContent.trim();
+							return sortDir[col] ? at.localeCompare( bt ) : bt.localeCompare( at );
+						} );
+						rows.forEach( function ( r ) { tbody.appendChild( r ); } );
+						tbl.querySelectorAll( 'th.dc-gi-is-th .dc-gi-is-arr' ).forEach( function ( el ) { el.textContent = '\u2195'; } );
+						th.querySelector( '.dc-gi-is-arr' ).textContent = sortDir[col] ? '\u2191' : '\u2193';
+					} );
+				} );
+			}
+		}());
+		</script>
+
 
 		<?php endif; ?>
 

@@ -25,6 +25,7 @@ define( 'DC_GI_CRON_HOOK',        'dc_gi_process_queue' );
 define( 'DC_GI_WATCH_HOOK',       'dc_gi_check_watchlist' );
 define( 'DC_GI_WATCH_CHECK_HOOK', 'dc_gi_watch_check_one_cron' );
 define( 'DC_GI_POLL_HOOK',        'dc_gi_poll_batch' );
+define( 'DC_GI_INSPECT_HOOK',     'dc_gi_inspect_batch' );
 define( 'DC_GI_DAILY_CAP',   200 );
 
 /**
@@ -43,6 +44,7 @@ function dc_gi_quota_date_key(): string {
 
 require_once DC_GI_DIR . 'class-jwt.php';
 require_once DC_GI_DIR . 'class-sitemap.php';
+require_once DC_GI_DIR . 'class-url-cache.php';
 require_once DC_GI_DIR . 'admin.php';
 
 // =============================================================================
@@ -531,7 +533,7 @@ function dc_gi_run_watchlist_check(): void {
 }
 
 // =============================================================================
-// POLLING BATCH — 5 URLs per run, cursor-aware, lock-protected
+// POLLING BATCH — reads URL cache, submits excluded URLs (no API calls here)
 // =============================================================================
 
 add_action( DC_GI_POLL_HOOK, 'dc_gi_run_poll_batch' );
@@ -541,8 +543,7 @@ function dc_gi_run_poll_batch( bool $force = false ): string {
 	if ( ! $force && ! get_option( 'dc_gi_poll_active', false ) ) {
 		return 'early:not_active';
 	}
-	// Stop polling when the daily Indexing API quota is exhausted — inspecting URLs
-	// serves no purpose if we cannot submit them.
+	// Stop polling when the daily Indexing API quota is exhausted.
 	if ( dc_gi_is_quota_exhausted() ) {
 		return 'early:quota_exhausted';
 	}
@@ -553,73 +554,51 @@ function dc_gi_run_poll_batch( bool $force = false ): string {
 	set_transient( 'dc_gi_poll_lock', 1, 30 );
 
 	try {
-		$settings = dc_gi_get_settings();
-		if ( empty( $settings['service_account_json'] ) ) {
-			return 'early:no_service_account';
-		}
-		$sa = json_decode( $settings['service_account_json'], true );
-		if ( ! $sa || empty( $sa['client_email'] ) || empty( $sa['private_key'] ) ) {
-			return 'early:invalid_service_account';
-		}
-
-		$site_url    = trailingslashit( get_home_url() );
-		$batch_size  = 5;
-		$submittable = [
-			'Crawled - currently not indexed',
-			'Discovered - currently not indexed',
-			'URL is unknown to Google', // Never seen by Google — submit to make it discoverable.
-			'',                          // API returns empty string for completely unknown URLs.
-		];
-
-		$all_urls = DC_GI_Sitemap::get_urls( 2000 );
-		if ( is_wp_error( $all_urls ) ) {
-			return 'early:sitemap_error:' . $all_urls->get_error_message();
+		// The inspection cache must be populated before polling can begin.
+		// The DC_GI_INSPECT_HOOK cron fills it in the background.
+		$cache_total = DC_GI_URL_Cache::count_total();
+		if ( 0 === $cache_total ) {
+			return 'early:cache_empty';
 		}
 
 		$watched_urls      = array_column( dc_gi_watchlist_get(), 'url' );
 		$poll_seen         = (array) get_option( 'dc_gi_poll_seen', [] );
 		$poll_seen_initial = $poll_seen; // snapshot to detect mid-batch resets
-		$eligible          = array_values( array_diff( $all_urls, $watched_urls ) );
-		$candidates   = array_values( array_diff( $eligible, $poll_seen ) );
+		$skip_urls         = array_values( array_unique( array_merge( $watched_urls, $poll_seen ) ) );
+
+		// Up to 50 URLs per batch — no per-URL API calls, so quota is not a concern here.
+		$batch_size = 50;
+		$candidates = DC_GI_URL_Cache::get_excluded_urls( $batch_size, $skip_urls );
 
 		if ( empty( $candidates ) ) {
 			// Full cycle done — reset cursor and begin the next cycle automatically.
 			delete_option( 'dc_gi_poll_seen' );
+			$cache_excluded = DC_GI_URL_Cache::count_excluded();
 			set_transient( 'dc_gi_last_poll', array_merge(
 				(array) get_transient( 'dc_gi_last_poll' ),
 				[
-					'cycle_seen'  => count( $eligible ),
-					'cycle_total' => count( $eligible ),
-					'cycle_done'  => true,
+					'cycle_seen'      => count( $poll_seen ),
+					'cycle_total'     => max( $cache_excluded, count( $poll_seen ) ),
+					'cycle_done'      => true,
+					'cycle_inspected' => count( $poll_seen ), // backward compat field
+					'source'          => 'cache',
 				]
 			), DAY_IN_SECONDS );
 			return 'cycle_complete';
 		}
 
-		$inspected  = 0;
 		$queued     = 0;
 		$skipped    = 0;
 		$errors     = 0;
 		$newly_seen = [];
 
-		foreach ( array_slice( $candidates, 0, $batch_size ) as $url ) {
-			$result = DC_GI_JWT::inspect_url( $sa, $url, $site_url );
-			$inspected++;
+		foreach ( $candidates as $url ) {
+			$entry    = DC_GI_URL_Cache::get_entry( $url );
+			$coverage = $entry['coverage_state'] ?? '';
 			$newly_seen[] = $url;
 
-			if ( is_wp_error( $result ) ) {
-				$errors++;
-				dc_gi_add_log( $url, 'INSPECT', $result );
-				continue;
-			}
-
-			$coverage = $result['inspectionResult']['indexStatusResult']['coverageState'] ?? '';
-			if ( in_array( $coverage, $submittable, true ) ) {
-				dc_gi_enqueue_url( $url, 'URL_UPDATED' );
-				$queued++;
-			} elseif ( in_array( $coverage, [ 'Not found (404)', 'Soft 404' ], true ) ) {
-				// URL is in the sitemap but returns 404 — log it as an informational
-				// note so the site owner can investigate and fix the sitemap.
+			// Log 404s for visibility but skip submission — submitting them is pointless.
+			if ( in_array( $coverage, [ 'Not found (404)', 'Soft 404' ], true ) ) {
 				$skipped++;
 				dc_gi_log_info(
 					$url,
@@ -627,28 +606,28 @@ function dc_gi_run_poll_batch( bool $force = false ): string {
 					/* translators: %s: Google coverage state (e.g. 'Not found (404)') */
 					sprintf( __( '%s during polling — skipped submission', 'dc-google-indexing' ), $coverage )
 				);
-			} else {
-				$skipped++;
+				continue;
 			}
+
+			dc_gi_enqueue_url( $url, 'URL_UPDATED' );
+			DC_GI_URL_Cache::mark_submitted( $url );
+			$queued++;
 		}
 
 		// Advance cursor.
 		$poll_seen   = array_values( array_unique( array_merge( $poll_seen, $newly_seen ) ) );
-		$remaining   = array_diff( $eligible, $poll_seen );
-		$cycle_done  = count( $remaining ) === 0;
 		$cycle_seen  = count( $poll_seen );
-		$cycle_total = count( $eligible );
+		$cache_excl  = DC_GI_URL_Cache::count_excluded();
+		$cycle_total = max( $cache_excl, $cycle_seen );
+		$cycle_done  = false;
 
 		// Carry forward cumulative cycle totals from previous batches.
-		$prev             = (array) get_transient( 'dc_gi_last_poll' );
-		$cycle_inspected  = ( $prev['cycle_inspected'] ?? 0 ) + $inspected;
-		$cycle_queued     = ( $prev['cycle_queued']    ?? 0 ) + $queued;
-		$cycle_skipped    = ( $prev['cycle_skipped']   ?? 0 ) + $skipped;
-		$cycle_errors     = ( $prev['cycle_errors']    ?? 0 ) + $errors;
+		$prev           = (array) get_transient( 'dc_gi_last_poll' );
+		$cycle_queued   = ( $prev['cycle_queued']  ?? 0 ) + $queued;
+		$cycle_skipped  = ( $prev['cycle_skipped'] ?? 0 ) + $skipped;
+		$cycle_errors   = ( $prev['cycle_errors']  ?? 0 ) + $errors;
 
 		// Detect if a Reset Cycle happened while this batch was running.
-		// We started mid-cycle (poll_seen was non-empty), but the option has since
-		// been deleted by the reset handler — bypass object cache to verify.
 		if ( ! empty( $poll_seen_initial ) ) {
 			global $wpdb;
 			$fresh_seen = $wpdb->get_var( $wpdb->prepare(
@@ -656,31 +635,25 @@ function dc_gi_run_poll_batch( bool $force = false ): string {
 				'dc_gi_poll_seen'
 			) );
 			if ( null === $fresh_seen ) {
-				// Reset happened during this batch — discard stale cursor write.
 				return 'ok:reset_detected';
 			}
 		}
 
-		if ( $cycle_done ) {
-			delete_option( 'dc_gi_poll_seen' );
-			$cycle_seen = $cycle_total;
-		} else {
-			update_option( 'dc_gi_poll_seen', $poll_seen, false );
-		}
+		update_option( 'dc_gi_poll_seen', $poll_seen, false );
 
 		set_transient( 'dc_gi_last_poll', [
-			'time'             => time(),
-			'inspected'        => $inspected,
-			'queued'           => $queued,
-			'skipped'          => $skipped,
-			'errors'           => $errors,
-			'cycle_inspected'  => $cycle_inspected,
-			'cycle_queued'     => $cycle_queued,
-			'cycle_skipped'    => $cycle_skipped,
-			'cycle_errors'     => $cycle_errors,
-			'cycle_seen'       => $cycle_seen,
-			'cycle_total'      => $cycle_total,
-			'cycle_done'       => $cycle_done,
+			'time'            => time(),
+			'queued'          => $queued,
+			'skipped'         => $skipped,
+			'errors'          => $errors,
+			'cycle_queued'    => $cycle_queued,
+			'cycle_skipped'   => $cycle_skipped,
+			'cycle_errors'    => $cycle_errors,
+			'cycle_inspected' => $cycle_seen,  // backward compat — repurposed as "seen from cache"
+			'cycle_seen'      => $cycle_seen,
+			'cycle_total'     => $cycle_total,
+			'cycle_done'      => $cycle_done,
+			'source'          => 'cache',
 		], DAY_IN_SECONDS );
 
 		return 'ok';
@@ -688,6 +661,24 @@ function dc_gi_run_poll_batch( bool $force = false ): string {
 	} finally {
 		delete_transient( 'dc_gi_poll_lock' );
 	}
+}
+
+// =============================================================================
+// INSPECTION BATCH — populate URL cache from sitemap via GSC Inspection API
+// =============================================================================
+
+add_action( DC_GI_INSPECT_HOOK, 'dc_gi_run_inspect_batch' );
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+function dc_gi_run_inspect_batch(): void {
+	$settings = dc_gi_get_settings();
+	if ( empty( $settings['service_account_json'] ) ) {
+		return;
+	}
+	$sa = json_decode( $settings['service_account_json'], true );
+	if ( ! $sa || empty( $sa['client_email'] ) || empty( $sa['private_key'] ) ) {
+		return;
+	}
+	DC_GI_URL_Cache::run_inspect_batch( $sa );
 }
 
 // =============================================================================
@@ -821,6 +812,7 @@ function dc_gi_clear_footer_cache(): void {
 register_activation_hook( DC_GI_FILE, 'dc_gi_activate' );
 // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
 function dc_gi_activate(): void {
+	DC_GI_URL_Cache::create_table();
 	if ( ! wp_next_scheduled( DC_GI_CRON_HOOK ) ) {
 		wp_schedule_event( time(), 'dc_gi_every5', DC_GI_CRON_HOOK );
 	}
@@ -829,6 +821,9 @@ function dc_gi_activate(): void {
 	}
 	if ( ! wp_next_scheduled( DC_GI_POLL_HOOK ) ) {
 		wp_schedule_event( time() + 60, 'dc_gi_every1', DC_GI_POLL_HOOK );
+	}
+	if ( ! wp_next_scheduled( DC_GI_INSPECT_HOOK ) ) {
+		wp_schedule_event( time() + 90, 'dc_gi_every1', DC_GI_INSPECT_HOOK );
 	}
 }
 
@@ -846,6 +841,10 @@ function dc_gi_maybe_reschedule_crons(): void {
 	// Stagger by 1 min so polling cron does not collide with queue cron at t=0.
 	if ( ! wp_next_scheduled( DC_GI_POLL_HOOK ) ) {
 		wp_schedule_event( time() + 60, 'dc_gi_every1', DC_GI_POLL_HOOK );
+	}
+	// Inspection cron: stagger by 90s so it doesn't fire at the same time as polling.
+	if ( ! wp_next_scheduled( DC_GI_INSPECT_HOOK ) ) {
+		wp_schedule_event( time() + 90, 'dc_gi_every1', DC_GI_INSPECT_HOOK );
 	}
 	// Restore the recurring watchlist check-one cron if it was lost but is still needed.
 	if ( get_option( 'dc_gi_watch_active', false ) && ! wp_next_scheduled( DC_GI_WATCH_CHECK_HOOK ) ) {
@@ -1002,6 +1001,7 @@ function dc_gi_deactivate(): void {
 	wp_clear_scheduled_hook( DC_GI_WATCH_HOOK );
 	wp_clear_scheduled_hook( DC_GI_WATCH_CHECK_HOOK );
 	wp_clear_scheduled_hook( DC_GI_POLL_HOOK );
+	wp_clear_scheduled_hook( DC_GI_INSPECT_HOOK );
 	update_option( 'dc_gi_poll_active', false );
 	delete_option( 'dc_gi_watch_active' );
 	delete_option( 'dc_gi_watch_offset' );

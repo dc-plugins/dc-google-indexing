@@ -9,6 +9,8 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
 	exit;
 }
 
+require_once plugin_dir_path( __FILE__ ) . 'class-url-cache.php';
+
 delete_option( 'dc_gi_settings' );
 delete_option( 'dc_gi_queue' );
 delete_option( 'dc_gi_log' );
@@ -37,6 +39,10 @@ wp_clear_scheduled_hook( 'dc_gi_process_queue' );
 wp_clear_scheduled_hook( 'dc_gi_check_watchlist' );
 wp_clear_scheduled_hook( 'dc_gi_watch_check_one_cron' );
 wp_clear_scheduled_hook( 'dc_gi_poll_batch' );
+wp_clear_scheduled_hook( 'dc_gi_inspect_batch' );
+
+// Drop URL inspection cache table.
+DC_GI_URL_Cache::drop_table();
 
 // Footer credit cache
 delete_transient( 'dc_gi_footer_strategy' );
