@@ -54,6 +54,7 @@ require_once DC_GI_DIR . 'admin.php';
 // CRON SCHEDULE
 // =============================================================================
 
+// phpcs:ignore WordPress.WP.CronInterval.CronSchedulesInterval -- The 5-minute interval is required for timely queue processing.
 add_filter( 'cron_schedules', 'dc_gi_cron_schedules' );
 /**
  * Register custom WP-Cron schedule intervals used by this plugin.
@@ -64,7 +65,7 @@ add_filter( 'cron_schedules', 'dc_gi_cron_schedules' );
 function dc_gi_cron_schedules( array $schedules ): array {
 	if ( ! isset( $schedules['dc_gi_every5'] ) ) {
 		$schedules['dc_gi_every5'] = [
-			'interval' => 300,
+			'interval' => 300, // phpcs:ignore WordPress.WP.CronInterval.CronSchedulesInterval
 			'display'  => __( 'Every 5 Minutes (DC Google Indexing)', 'dc-google-indexing' ),
 		];
 	}
