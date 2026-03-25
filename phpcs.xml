@@ -30,4 +30,14 @@
             </property>
         </properties>
     </rule>
+
+    <!-- This codebase uses short array syntax [] by convention. -->
+    <rule ref="Universal.Arrays.DisallowShortArraySyntax">
+        <exclude name="Universal.Arrays.DisallowShortArraySyntax.Found"/>
+    </rule>
+
+    <!-- Class file names use abbreviated names (e.g. class-jwt.php) by convention. -->
+    <rule ref="WordPress.Files.FileName">
+        <exclude name="WordPress.Files.FileName.InvalidClassFileName"/>
+    </rule>
 </ruleset>

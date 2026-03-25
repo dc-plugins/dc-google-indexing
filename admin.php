@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 /**
  * Admin interface for DC Google Indexing.
  *
@@ -14,7 +14,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 // =============================================================================
 
 add_action( 'admin_menu', 'dc_gi_admin_menu' );
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * Register the plugin top-level admin menu page.
+ */
 function dc_gi_admin_menu(): void {
 	add_menu_page(
 		__( 'DC Google Indexing', 'dc-google-indexing' ),
@@ -28,10 +30,15 @@ function dc_gi_admin_menu(): void {
 }
 
 add_filter( 'admin_footer_text', 'dc_gi_admin_footer_text' );
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * Replace the default admin footer text with a DC Plugins credit on the plugin's own page.
+ *
+ * @param string $text Default footer text.
+ * @return string Modified footer text.
+ */
 function dc_gi_admin_footer_text( string $text ): string {
 	$screen = get_current_screen();
-	if ( $screen && $screen->id === 'toplevel_page_dc-google-indexing' ) {
+	if ( $screen && 'toplevel_page_dc-google-indexing' === $screen->id ) {
 		return sprintf(
 			/* translators: %s: URL to DC Plugins GitHub organisation */
 			__( 'More plugins by <a href="%s" target="_blank" rel="noopener">DC Plugins</a>', 'dc-google-indexing' ),
@@ -45,67 +52,75 @@ function dc_gi_admin_footer_text( string $text ): string {
 // FORM HANDLERS
 // =============================================================================
 
-add_action( 'admin_post_dc_gi_save',       'dc_gi_handle_save' );
-add_action( 'admin_post_dc_gi_test',       'dc_gi_handle_test' );
-add_action( 'admin_post_dc_gi_submit',     'dc_gi_handle_submit' );
-add_action( 'admin_post_dc_gi_runnow',     'dc_gi_handle_runnow' );
-add_action( 'admin_post_dc_gi_clrqueue',   'dc_gi_handle_clear_queue' );
-add_action( 'admin_post_dc_gi_clrlog',     'dc_gi_handle_clear_log' );
+add_action( 'admin_post_dc_gi_save', 'dc_gi_handle_save' );
+add_action( 'admin_post_dc_gi_test', 'dc_gi_handle_test' );
+add_action( 'admin_post_dc_gi_submit', 'dc_gi_handle_submit' );
+add_action( 'admin_post_dc_gi_runnow', 'dc_gi_handle_runnow' );
+add_action( 'admin_post_dc_gi_clrqueue', 'dc_gi_handle_clear_queue' );
+add_action( 'admin_post_dc_gi_clrlog', 'dc_gi_handle_clear_log' );
 add_action( 'admin_post_dc_gi_poll_reset', 'dc_gi_handle_poll_reset' );
 add_action( 'admin_post_dc_gi_cache_clear', 'dc_gi_handle_cache_clear' );
-add_action( 'admin_post_dc_gi_watch_del',  'dc_gi_handle_watch_delete' );
-add_action( 'admin_post_dc_gi_watch_clr',  'dc_gi_handle_watch_clear' );
-add_action( 'admin_post_dc_gi_watch_now',  'dc_gi_handle_watch_check_now' );
+add_action( 'admin_post_dc_gi_watch_del', 'dc_gi_handle_watch_delete' );
+add_action( 'admin_post_dc_gi_watch_clr', 'dc_gi_handle_watch_clear' );
+add_action( 'admin_post_dc_gi_watch_now', 'dc_gi_handle_watch_check_now' );
 
-add_action( 'wp_ajax_dc_gi_poll_start',  'dc_gi_ajax_poll_start' );
-add_action( 'wp_ajax_dc_gi_poll_stop',   'dc_gi_ajax_poll_stop' );
+add_action( 'wp_ajax_dc_gi_poll_start', 'dc_gi_ajax_poll_start' );
+add_action( 'wp_ajax_dc_gi_poll_stop', 'dc_gi_ajax_poll_stop' );
 add_action( 'wp_ajax_dc_gi_poll_status', 'dc_gi_ajax_poll_status' );
-add_action( 'wp_ajax_dc_gi_poll_wait',   'dc_gi_ajax_poll_wait' );
-add_action( 'wp_ajax_dc_gi_watch_check_one',    'dc_gi_ajax_watch_check_one' );
-add_action( 'wp_ajax_dc_gi_watch_stop',          'dc_gi_ajax_watch_stop' );
-add_action( 'wp_ajax_dc_gi_watch_resubmit_one',  'dc_gi_ajax_watch_resubmit_one' );
-add_action( 'wp_ajax_dc_gi_watch_status',        'dc_gi_ajax_watch_status' );
-add_action( 'admin_post_dc_gi_watch_fix_cron',   'dc_gi_handle_watch_fix_cron' );
+add_action( 'wp_ajax_dc_gi_poll_wait', 'dc_gi_ajax_poll_wait' );
+add_action( 'wp_ajax_dc_gi_watch_check_one', 'dc_gi_ajax_watch_check_one' );
+add_action( 'wp_ajax_dc_gi_watch_stop', 'dc_gi_ajax_watch_stop' );
+add_action( 'wp_ajax_dc_gi_watch_resubmit_one', 'dc_gi_ajax_watch_resubmit_one' );
+add_action( 'wp_ajax_dc_gi_watch_status', 'dc_gi_ajax_watch_status' );
+add_action( 'admin_post_dc_gi_watch_fix_cron', 'dc_gi_handle_watch_fix_cron' );
 add_action( 'admin_post_dc_gi_watch_clr_indexed', 'dc_gi_handle_watch_clear_indexed' );
-add_action( 'wp_ajax_dc_gi_qa_scan_one',   'dc_gi_ajax_qa_scan_one' );
-add_action( 'wp_ajax_dc_gi_qa_stop',       'dc_gi_ajax_qa_stop' );
-add_action( 'admin_post_dc_gi_qa_clear',   'dc_gi_handle_qa_clear' );
-add_action( 'wp_ajax_dc_gi_index_status',  'dc_gi_ajax_index_status' );
+add_action( 'wp_ajax_dc_gi_qa_scan_one', 'dc_gi_ajax_qa_scan_one' );
+add_action( 'wp_ajax_dc_gi_qa_stop', 'dc_gi_ajax_qa_stop' );
+add_action( 'admin_post_dc_gi_qa_clear', 'dc_gi_handle_qa_clear' );
+add_action( 'wp_ajax_dc_gi_index_status', 'dc_gi_ajax_index_status' );
 add_action( 'admin_enqueue_scripts', 'dc_gi_enqueue_scripts' );
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * Enqueue admin scripts and localized data for the plugin's admin page.
+ *
+ * @param string $hook Current admin page hook suffix.
+ */
 function dc_gi_enqueue_scripts( string $hook ): void {
 	if ( 'toplevel_page_dc-google-indexing' !== $hook ) {
 		return;
 	}
 	wp_register_script( 'dc-gi-admin', false, [ 'jquery' ], DC_GI_VERSION, true );
 	wp_enqueue_script( 'dc-gi-admin' );
-	wp_localize_script( 'dc-gi-admin', 'dcGiPoll', [
-		'nonce'           => wp_create_nonce( 'dc_gi_ajax' ),
-		'ajaxurl'         => admin_url( 'admin-ajax.php' ),
-		'active'          => (bool) get_option( 'dc_gi_poll_active', false ),
-		'watchActive'     => (bool) get_option( 'dc_gi_watch_active', false ),
-		'watchOffset'     => (int) get_option( 'dc_gi_watch_offset', 0 ),
-		'watchTotal'      => count( (array) get_option( 'dc_gi_watchlist', [] ) ),
-		'qaActive'        => (bool) get_option( 'dc_gi_qa_active', false ),
-		'qaOffset'        => (int) get_option( 'dc_gi_qa_offset', 0 ),
-		'qaPendingCount'  => count( (array) get_option( 'dc_gi_qa_pending', [] ) ),
-		'quotaExhausted'  => dc_gi_is_quota_exhausted(),
-		'i18n'            => [
-			'starting'          => __( 'Starting…', 'dc-google-indexing' ),
-			'stopping'          => __( 'Stopping…', 'dc-google-indexing' ),
-			'running'           => __( 'Running', 'dc-google-indexing' ),
-			'stopped'           => __( '○ Stopped', 'dc-google-indexing' ),
-			'done'              => __( '✅ Cycle complete', 'dc-google-indexing' ),
-			'quotaExhausted'    => __( '🚫 Daily quota exhausted', 'dc-google-indexing' ),
-			'errComms'          => __( 'Communication error — retrying…', 'dc-google-indexing' ),
-			'watchRunning'      => __( '● Running in background', 'dc-google-indexing' ),
-			'watchStopped'      => __( '○ Stopped', 'dc-google-indexing' ),
-			'watchDone'         => __( '✅ Check complete', 'dc-google-indexing' ),
-			'qaRunning'         => __( '● Scanning…', 'dc-google-indexing' ),
-			'qaStopped'         => __( '○ Stopped', 'dc-google-indexing' ),
-			'qaDone'            => __( '✅ Scan complete', 'dc-google-indexing' ),
-		],
-	] );
+	wp_localize_script(
+		'dc-gi-admin',
+		'dcGiPoll',
+		[
+			'nonce'          => wp_create_nonce( 'dc_gi_ajax' ),
+			'ajaxurl'        => admin_url( 'admin-ajax.php' ),
+			'active'         => (bool) get_option( 'dc_gi_poll_active', false ),
+			'watchActive'    => (bool) get_option( 'dc_gi_watch_active', false ),
+			'watchOffset'    => (int) get_option( 'dc_gi_watch_offset', 0 ),
+			'watchTotal'     => count( (array) get_option( 'dc_gi_watchlist', [] ) ),
+			'qaActive'       => (bool) get_option( 'dc_gi_qa_active', false ),
+			'qaOffset'       => (int) get_option( 'dc_gi_qa_offset', 0 ),
+			'qaPendingCount' => count( (array) get_option( 'dc_gi_qa_pending', [] ) ),
+			'quotaExhausted' => dc_gi_is_quota_exhausted(),
+			'i18n'           => [
+				'starting'       => __( 'Starting…', 'dc-google-indexing' ),
+				'stopping'       => __( 'Stopping…', 'dc-google-indexing' ),
+				'running'        => __( 'Running', 'dc-google-indexing' ),
+				'stopped'        => __( '○ Stopped', 'dc-google-indexing' ),
+				'done'           => __( '✅ Cycle complete', 'dc-google-indexing' ),
+				'quotaExhausted' => __( '🚫 Daily quota exhausted', 'dc-google-indexing' ),
+				'errComms'       => __( 'Communication error — retrying…', 'dc-google-indexing' ),
+				'watchRunning'   => __( '● Running in background', 'dc-google-indexing' ),
+				'watchStopped'   => __( '○ Stopped', 'dc-google-indexing' ),
+				'watchDone'      => __( '✅ Check complete', 'dc-google-indexing' ),
+				'qaRunning'      => __( '● Scanning…', 'dc-google-indexing' ),
+				'qaStopped'      => __( '○ Stopped', 'dc-google-indexing' ),
+				'qaDone'         => __( '✅ Scan complete', 'dc-google-indexing' ),
+			],
+		]
+	);
 	wp_add_inline_script( 'dc-gi-admin', dc_gi_poll_js() );
 	wp_add_inline_script( 'dc-gi-admin', dc_gi_watch_check_js() );
 	wp_add_inline_script( 'dc-gi-admin', dc_gi_qa_js() );
@@ -113,7 +128,9 @@ function dc_gi_enqueue_scripts( string $hook ): void {
 
 // Sticky admin notice when daily Indexing API quota is exhausted.
 add_action( 'admin_notices', 'dc_gi_quota_exhausted_notice' );
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * Display a sticky admin notice when the daily Indexing API quota is exhausted.
+ */
 function dc_gi_quota_exhausted_notice(): void {
 	if ( ! current_user_can( 'manage_options' ) ) {
 		return;
@@ -141,7 +158,11 @@ function dc_gi_quota_exhausted_notice(): void {
 	<?php
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * Return the inline JavaScript for the polling UI.
+ *
+ * @return string JavaScript source code.
+ */
 function dc_gi_poll_js(): string {
 	return <<<'JS'
 (function($){
@@ -318,7 +339,11 @@ function dc_gi_poll_js(): string {
 JS;
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * Return the inline JavaScript for the watchlist live-check UI.
+ *
+ * @return string JavaScript source code.
+ */
 function dc_gi_watch_check_js(): string {
 	return <<<'JS'
 (function($){
@@ -521,7 +546,11 @@ function dc_gi_watch_check_js(): string {
 JS;
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * Return the inline JavaScript for the QA scan UI.
+ *
+ * @return string JavaScript source code.
+ */
 function dc_gi_qa_js(): string {
 	return <<<'JS'
 (function($){
@@ -758,7 +787,9 @@ function dc_gi_qa_js(): string {
 JS;
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * Handle the settings save form submission.
+ */
 function dc_gi_handle_save(): void {
 	check_admin_referer( 'dc_gi_save' );
 	if ( ! current_user_can( 'manage_options' ) ) {
@@ -773,13 +804,18 @@ function dc_gi_handle_save(): void {
 	if ( ! empty( $raw_json ) ) {
 		$parsed = json_decode( $raw_json, true );
 		if ( ! $parsed || empty( $parsed['client_email'] ) || empty( $parsed['private_key'] ) ) {
-			wp_safe_redirect( add_query_arg(
-				[ 'page' => 'dc-google-indexing', 'notice' => 'invalid_json' ],
-				admin_url( 'admin.php' )
-			) );
+			wp_safe_redirect(
+				add_query_arg(
+					[
+						'page'   => 'dc-google-indexing',
+						'notice' => 'invalid_json',
+					],
+					admin_url( 'admin.php' )
+				)
+			);
 			exit;
 		}
-		// Clear cached token when credentials change
+		// Clear cached token when credentials change.
 		if ( ( $old['service_account_json'] ?? '' ) !== $raw_json ) {
 			delete_transient( 'dc_gi_access_token' );
 		}
@@ -791,23 +827,33 @@ function dc_gi_handle_save(): void {
 		? array_map( 'sanitize_key', wp_unslash( $_POST['post_types'] ) )
 		: [];
 
-	update_option( 'dc_gi_settings', [
-		'service_account_json' => $raw_json,
-		'auto_submit'          => ! empty( $_POST['auto_submit'] ) ? 1 : 0,
-		'auto_delete'          => ! empty( $_POST['auto_delete'] ) ? 1 : 0,
-		'post_types'           => $post_types,
-		'daily_quota'          => min( 200, max( 1, absint( isset( $_POST['daily_quota'] ) ? wp_unslash( $_POST['daily_quota'] ) : 200 ) ) ),
-		'footer_credit'        => ! empty( $_POST['footer_credit'] ) ? 1 : 0,
-	] );
+	update_option(
+		'dc_gi_settings',
+		[
+			'service_account_json' => $raw_json,
+			'auto_submit'          => ! empty( $_POST['auto_submit'] ) ? 1 : 0,
+			'auto_delete'          => ! empty( $_POST['auto_delete'] ) ? 1 : 0,
+			'post_types'           => $post_types,
+			'daily_quota'          => min( 200, max( 1, absint( isset( $_POST['daily_quota'] ) ? wp_unslash( $_POST['daily_quota'] ) : 200 ) ) ),
+			'footer_credit'        => ! empty( $_POST['footer_credit'] ) ? 1 : 0,
+		]
+	);
 
-	wp_safe_redirect( add_query_arg(
-		[ 'page' => 'dc-google-indexing', 'notice' => 'saved' ],
-		admin_url( 'admin.php' )
-	) );
+	wp_safe_redirect(
+		add_query_arg(
+			[
+				'page'   => 'dc-google-indexing',
+				'notice' => 'saved',
+			],
+			admin_url( 'admin.php' )
+		)
+	);
 	exit;
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * Handle the connection-test form submission.
+ */
 function dc_gi_handle_test(): void {
 	check_admin_referer( 'dc_gi_test' );
 	if ( ! current_user_can( 'manage_options' ) ) {
@@ -816,10 +862,15 @@ function dc_gi_handle_test(): void {
 
 	$settings = dc_gi_get_settings();
 	if ( empty( $settings['service_account_json'] ) ) {
-		wp_safe_redirect( add_query_arg(
-			[ 'page' => 'dc-google-indexing', 'notice' => 'test_no_sa' ],
-			admin_url( 'admin.php' )
-		) );
+		wp_safe_redirect(
+			add_query_arg(
+				[
+					'page'   => 'dc-google-indexing',
+					'notice' => 'test_no_sa',
+				],
+				admin_url( 'admin.php' )
+			)
+		);
 		exit;
 	}
 
@@ -828,14 +879,22 @@ function dc_gi_handle_test(): void {
 	$notice = is_wp_error( $result ) ? 'test_fail' : 'test_ok';
 	$msg    = is_wp_error( $result ) ? rawurlencode( $result->get_error_message() ) : '';
 
-	wp_safe_redirect( add_query_arg(
-		[ 'page' => 'dc-google-indexing', 'notice' => $notice, 'errmsg' => $msg ],
-		admin_url( 'admin.php' )
-	) );
+	wp_safe_redirect(
+		add_query_arg(
+			[
+				'page'   => 'dc-google-indexing',
+				'notice' => $notice,
+				'errmsg' => $msg,
+			],
+			admin_url( 'admin.php' )
+		)
+	);
 	exit;
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * Handle the manual URL submission form.
+ */
 function dc_gi_handle_submit(): void {
 	check_admin_referer( 'dc_gi_submit' );
 	if ( ! current_user_can( 'manage_options' ) ) {
@@ -850,60 +909,93 @@ function dc_gi_handle_submit(): void {
 		$clean = esc_url_raw( $url );
 		if ( $clean ) {
 			dc_gi_enqueue_url( $clean, $type );
-			$count++;
+			++$count;
 		}
 	}
 
-	wp_safe_redirect( add_query_arg(
-		[ 'page' => 'dc-google-indexing', 'tab' => 'submit', 'notice' => 'queued', 'count' => $count ],
-		admin_url( 'admin.php' )
-	) );
+	wp_safe_redirect(
+		add_query_arg(
+			[
+				'page'   => 'dc-google-indexing',
+				'tab'    => 'submit',
+				'notice' => 'queued',
+				'count'  => $count,
+			],
+			admin_url( 'admin.php' )
+		)
+	);
 	exit;
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * Handle the Run Now (process queue immediately) form action.
+ */
 function dc_gi_handle_runnow(): void {
 	check_admin_referer( 'dc_gi_runnow' );
 	if ( ! current_user_can( 'manage_options' ) ) {
 		wp_die( esc_html__( 'Forbidden', 'dc-google-indexing' ) );
 	}
 	dc_gi_process_queue();
-	wp_safe_redirect( add_query_arg(
-		[ 'page' => 'dc-google-indexing', 'tab' => 'queue', 'notice' => 'processed' ],
-		admin_url( 'admin.php' )
-	) );
+	wp_safe_redirect(
+		add_query_arg(
+			[
+				'page'   => 'dc-google-indexing',
+				'tab'    => 'queue',
+				'notice' => 'processed',
+			],
+			admin_url( 'admin.php' )
+		)
+	);
 	exit;
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * Handle the clear-queue form action.
+ */
 function dc_gi_handle_clear_queue(): void {
 	check_admin_referer( 'dc_gi_clrqueue' );
 	if ( ! current_user_can( 'manage_options' ) ) {
 		wp_die( esc_html__( 'Forbidden', 'dc-google-indexing' ) );
 	}
 	update_option( 'dc_gi_queue', [], false );
-	wp_safe_redirect( add_query_arg(
-		[ 'page' => 'dc-google-indexing', 'tab' => 'queue', 'notice' => 'queue_cleared' ],
-		admin_url( 'admin.php' )
-	) );
+	wp_safe_redirect(
+		add_query_arg(
+			[
+				'page'   => 'dc-google-indexing',
+				'tab'    => 'queue',
+				'notice' => 'queue_cleared',
+			],
+			admin_url( 'admin.php' )
+		)
+	);
 	exit;
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * Handle the clear-log form action.
+ */
 function dc_gi_handle_clear_log(): void {
 	check_admin_referer( 'dc_gi_clrlog' );
 	if ( ! current_user_can( 'manage_options' ) ) {
 		wp_die( esc_html__( 'Forbidden', 'dc-google-indexing' ) );
 	}
 	update_option( 'dc_gi_log', [], false );
-	wp_safe_redirect( add_query_arg(
-		[ 'page' => 'dc-google-indexing', 'tab' => 'log', 'notice' => 'log_cleared' ],
-		admin_url( 'admin.php' )
-	) );
+	wp_safe_redirect(
+		add_query_arg(
+			[
+				'page'   => 'dc-google-indexing',
+				'tab'    => 'log',
+				'notice' => 'log_cleared',
+			],
+			admin_url( 'admin.php' )
+		)
+	);
 	exit;
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * Handle the delete-from-watchlist form action.
+ */
 function dc_gi_handle_watch_delete(): void {
 	check_admin_referer( 'dc_gi_watch_del' );
 	if ( ! current_user_can( 'manage_options' ) ) {
@@ -913,28 +1005,43 @@ function dc_gi_handle_watch_delete(): void {
 	if ( $url ) {
 		dc_gi_watchlist_remove( $url );
 	}
-	wp_safe_redirect( add_query_arg(
-		[ 'page' => 'dc-google-indexing', 'tab' => 'watchlist' ],
-		admin_url( 'admin.php' )
-	) );
+	wp_safe_redirect(
+		add_query_arg(
+			[
+				'page' => 'dc-google-indexing',
+				'tab'  => 'watchlist',
+			],
+			admin_url( 'admin.php' )
+		)
+	);
 	exit;
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * Handle the clear-watchlist form action.
+ */
 function dc_gi_handle_watch_clear(): void {
 	check_admin_referer( 'dc_gi_watch_clr' );
 	if ( ! current_user_can( 'manage_options' ) ) {
 		wp_die( esc_html__( 'Forbidden', 'dc-google-indexing' ) );
 	}
 	update_option( 'dc_gi_watchlist', [], false );
-	wp_safe_redirect( add_query_arg(
-		[ 'page' => 'dc-google-indexing', 'tab' => 'watchlist', 'notice' => 'watch_cleared' ],
-		admin_url( 'admin.php' )
-	) );
+	wp_safe_redirect(
+		add_query_arg(
+			[
+				'page'   => 'dc-google-indexing',
+				'tab'    => 'watchlist',
+				'notice' => 'watch_cleared',
+			],
+			admin_url( 'admin.php' )
+		)
+	);
 	exit;
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * Handle the clear-indexed-entries form action (removes 'indexed' entries from watchlist).
+ */
 function dc_gi_handle_watch_clear_indexed(): void {
 	check_admin_referer( 'dc_gi_watch_clr_indexed' );
 	if ( ! current_user_can( 'manage_options' ) ) {
@@ -944,14 +1051,23 @@ function dc_gi_handle_watch_clear_indexed(): void {
 	$filtered = array_values( array_filter( $list, fn( $e ) => 'indexed' !== $e['status'] ) );
 	$removed  = count( $list ) - count( $filtered );
 	update_option( 'dc_gi_watchlist', $filtered, false );
-	wp_safe_redirect( add_query_arg(
-		[ 'page' => 'dc-google-indexing', 'tab' => 'watchlist', 'notice' => 'watch_indexed_cleared', 'count' => $removed ],
-		admin_url( 'admin.php' )
-	) );
+	wp_safe_redirect(
+		add_query_arg(
+			[
+				'page'   => 'dc-google-indexing',
+				'tab'    => 'watchlist',
+				'notice' => 'watch_indexed_cleared',
+				'count'  => $removed,
+			],
+			admin_url( 'admin.php' )
+		)
+	);
 	exit;
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * Handle the watchlist Check Now form action.
+ */
 function dc_gi_handle_watch_check_now(): void {
 	check_admin_referer( 'dc_gi_watch_now' );
 	if ( ! current_user_can( 'manage_options' ) ) {
@@ -968,14 +1084,22 @@ function dc_gi_handle_watch_check_now(): void {
 	if ( ! wp_next_scheduled( DC_GI_WATCH_CHECK_HOOK ) ) {
 		wp_schedule_event( time() + 60, 'dc_gi_every1', DC_GI_WATCH_CHECK_HOOK );
 	}
-	wp_safe_redirect( add_query_arg(
-		[ 'page' => 'dc-google-indexing', 'tab' => 'watchlist', 'notice' => 'watch_checked' ],
-		admin_url( 'admin.php' )
-	) );
+	wp_safe_redirect(
+		add_query_arg(
+			[
+				'page'   => 'dc-google-indexing',
+				'tab'    => 'watchlist',
+				'notice' => 'watch_checked',
+			],
+			admin_url( 'admin.php' )
+		)
+	);
 	exit;
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * Handle the fix-watchlist-cron form action.
+ */
 function dc_gi_handle_watch_fix_cron(): void {
 	check_admin_referer( 'dc_gi_watch_fix_cron' );
 	if ( ! current_user_can( 'manage_options' ) ) {
@@ -984,10 +1108,16 @@ function dc_gi_handle_watch_fix_cron(): void {
 	if ( ! wp_next_scheduled( DC_GI_WATCH_HOOK ) ) {
 		wp_schedule_event( time() + 60, 'dc_gi_sixhourly', DC_GI_WATCH_HOOK );
 	}
-	wp_safe_redirect( add_query_arg(
-		[ 'page' => 'dc-google-indexing', 'tab' => 'watchlist', 'notice' => 'cron_fixed' ],
-		admin_url( 'admin.php' )
-	) );
+	wp_safe_redirect(
+		add_query_arg(
+			[
+				'page'   => 'dc-google-indexing',
+				'tab'    => 'watchlist',
+				'notice' => 'cron_fixed',
+			],
+			admin_url( 'admin.php' )
+		)
+	);
 	exit;
 }
 
@@ -995,7 +1125,6 @@ function dc_gi_handle_watch_fix_cron(): void {
  * AJAX: check one pending watchlist URL and return progress.
  * Offset is passed from JS; list order is stable (array index).
  */
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
 function dc_gi_ajax_watch_check_one(): void {
 	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
 	if ( ! current_user_can( 'manage_options' ) ) {
@@ -1016,8 +1145,8 @@ function dc_gi_ajax_watch_check_one(): void {
 	$list     = get_option( 'dc_gi_watchlist', [] );
 
 	// Build flat array of all entries (pending + already indexed — we skip indexed in loop).
-	$keys    = array_keys( $list );
-	$total   = count( $keys );
+	$keys  = array_keys( $list );
+	$total = count( $keys );
 
 	// Mark active + store cursor so cron can continue if JS disconnects.
 	update_option( 'dc_gi_watch_active', true, false );
@@ -1032,21 +1161,28 @@ function dc_gi_ajax_watch_check_one(): void {
 
 	// Advance offset past already-done entries.
 	while ( $offset < $total && in_array( $list[ $keys[ $offset ] ]['status'] ?? '', $done_statuses, true ) ) {
-		$offset++;
+		++$offset;
 	}
 
 	if ( $offset >= $total ) {
 		delete_option( 'dc_gi_watch_active' );
 		delete_option( 'dc_gi_watch_offset' );
 		wp_clear_scheduled_hook( DC_GI_WATCH_CHECK_HOOK );
-		wp_send_json_success( [ 'done' => true, 'checked' => $offset, 'total' => $total, 'queue_count' => count( (array) get_option( 'dc_gi_queue', [] ) ) ] );
+		wp_send_json_success(
+			[
+				'done'        => true,
+				'checked'     => $offset,
+				'total'       => $total,
+				'queue_count' => count( (array) get_option( 'dc_gi_queue', [] ) ),
+			]
+		);
 	}
 
 	$key       = $keys[ $offset ];
 	$entry     = &$list[ $key ];
 	$entry_url = $entry['url'];
 
-	$result            = DC_GI_JWT::inspect_url( $sa, $entry_url, $site_url );
+	$result                = DC_GI_JWT::inspect_url( $sa, $entry_url, $site_url );
 	$entry['last_checked'] = time();
 
 	$auto_removed = false;
@@ -1099,7 +1235,7 @@ function dc_gi_ajax_watch_check_one(): void {
 					// Google has not indexed the URL yet — re-submit via Indexing API to
 					// signal it is ready (covers unknown, discovered, and crawled states).
 					dc_gi_enqueue_url( $entry_url, 'URL_UPDATED' );
-					$entry['coverage'] = $coverage ?: 'URL is unknown to Google';
+					$entry['coverage']  = ( ! empty( $coverage ) ) ? $coverage : 'URL is unknown to Google';
 					$entry['coverage'] .= ' (re-queued for submission)';
 				}
 				// Flag for manual QA when Google has seen the URL but not indexed it yet.
@@ -1128,7 +1264,7 @@ function dc_gi_ajax_watch_check_one(): void {
 	$next_offset = $auto_removed ? $offset : $offset + 1;
 	// Skip any trailing already-done entries for the next call.
 	while ( $next_offset < $total && in_array( $list[ $keys[ $next_offset ] ]['status'] ?? '', $done_statuses, true ) ) {
-		$next_offset++;
+		++$next_offset;
 	}
 
 	$done        = $next_offset >= $total;
@@ -1143,20 +1279,24 @@ function dc_gi_ajax_watch_check_one(): void {
 		update_option( 'dc_gi_watch_offset', $next_offset, false );
 	}
 
-	wp_send_json_success( [
-		'done'         => $done,
-		'checked'      => $auto_removed ? $offset : $offset + 1,
-		'total'        => $total,
-		'next'         => $next_offset,
-		'url'          => $entry_url,
-		'status'       => $auto_removed ? 'auto_removed' : ( $list[ $keys[ $offset ] ]['status'] ?? '' ),
-		'coverage'     => $auto_removed ? '' : ( $list[ $keys[ $offset ] ]['coverage'] ?? '' ),
-		'auto_removed' => $auto_removed,
-		'queue_count'  => $queue_count,
-	] );
+	wp_send_json_success(
+		[
+			'done'         => $done,
+			'checked'      => $auto_removed ? $offset : $offset + 1,
+			'total'        => $total,
+			'next'         => $next_offset,
+			'url'          => $entry_url,
+			'status'       => $auto_removed ? 'auto_removed' : ( $list[ $keys[ $offset ] ]['status'] ?? '' ),
+			'coverage'     => $auto_removed ? '' : ( $list[ $keys[ $offset ] ]['coverage'] ?? '' ),
+			'auto_removed' => $auto_removed,
+			'queue_count'  => $queue_count,
+		]
+	);
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * AJAX: Stop the watchlist live-check loop.
+ */
 function dc_gi_ajax_watch_stop(): void {
 	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
 	if ( ! current_user_can( 'manage_options' ) ) {
@@ -1171,24 +1311,24 @@ function dc_gi_ajax_watch_stop(): void {
 /**
  * AJAX: Return the current watchlist running state so JS can show the badge.
  */
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
 function dc_gi_ajax_watch_status(): void {
 	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
 	if ( ! current_user_can( 'manage_options' ) ) {
 		wp_send_json_error( 'Forbidden', 403 );
 	}
-	wp_send_json_success( [
-		'active' => (bool) get_option( 'dc_gi_watch_active', false ),
-		'offset' => (int) get_option( 'dc_gi_watch_offset', 0 ),
-		'total'  => count( (array) get_option( 'dc_gi_watchlist', [] ) ),
-	] );
+	wp_send_json_success(
+		[
+			'active' => (bool) get_option( 'dc_gi_watch_active', false ),
+			'offset' => (int) get_option( 'dc_gi_watch_offset', 0 ),
+			'total'  => count( (array) get_option( 'dc_gi_watchlist', [] ) ),
+		]
+	);
 }
 
 /**
  * AJAX: Re-submit a single watchlist URL to the Google Indexing API.
  * Enqueues the URL for URL_UPDATED and resets its watchlist status to 'pending'.
  */
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
 function dc_gi_ajax_watch_resubmit_one(): void {
 	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
 	if ( ! current_user_can( 'manage_options' ) ) {
@@ -1200,7 +1340,7 @@ function dc_gi_ajax_watch_resubmit_one(): void {
 		wp_send_json_error( 'missing_url' );
 	}
 
-	$list = get_option( 'dc_gi_watchlist', [] );
+	$list  = get_option( 'dc_gi_watchlist', [] );
 	$found = false;
 	foreach ( $list as &$entry ) {
 		if ( $entry['url'] === $url ) {
@@ -1208,8 +1348,8 @@ function dc_gi_ajax_watch_resubmit_one(): void {
 			// Enqueue for re-submission via Indexing API.
 			dc_gi_enqueue_url( $url, 'URL_UPDATED' );
 			// Reset status so the watchlist tracks the new submission.
-			$entry['status']    = 'pending';
-			$entry['coverage']  = '';
+			$entry['status']       = 'pending';
+			$entry['coverage']     = '';
 			$entry['submitted_at'] = time();
 			break;
 		}
@@ -1224,10 +1364,17 @@ function dc_gi_ajax_watch_resubmit_one(): void {
 		update_option( 'dc_gi_watchlist', $list, false );
 	}
 
-	wp_send_json_success( [ 'url' => $url, 'queue_count' => count( (array) get_option( 'dc_gi_queue', [] ) ) ] );
+	wp_send_json_success(
+		[
+			'url'         => $url,
+			'queue_count' => count( (array) get_option( 'dc_gi_queue', [] ) ),
+		]
+	);
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * AJAX: Activate polling and return current poll status data.
+ */
 function dc_gi_ajax_poll_start(): void {
 	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
 	if ( ! current_user_can( 'manage_options' ) ) {
@@ -1241,7 +1388,9 @@ function dc_gi_ajax_poll_start(): void {
 	wp_send_json_success( dc_gi_poll_status_data() );
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * AJAX: Deactivate polling and reset the cycle cursor.
+ */
 function dc_gi_ajax_poll_stop(): void {
 	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
 	if ( ! current_user_can( 'manage_options' ) ) {
@@ -1254,7 +1403,9 @@ function dc_gi_ajax_poll_stop(): void {
 	wp_send_json_success( dc_gi_poll_status_data() );
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * AJAX: Return current poll status data without starting or stopping polling.
+ */
 function dc_gi_ajax_poll_status(): void {
 	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
 	if ( ! current_user_can( 'manage_options' ) ) {
@@ -1268,7 +1419,6 @@ function dc_gi_ajax_poll_status(): void {
  * The browser reconnects immediately, driving the loop — no cron needed
  * for the interactive case. Cron remains as a background fallback.
  */
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
 function dc_gi_ajax_poll_wait(): void {
 	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
 	if ( ! current_user_can( 'manage_options' ) ) {
@@ -1278,11 +1428,13 @@ function dc_gi_ajax_poll_wait(): void {
 	global $wpdb;
 
 	// Check active state directly from DB (bypass object cache).
-	$row_active = $wpdb->get_var( $wpdb->prepare(
-		"SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1",
-		'dc_gi_poll_active'
-	) );
-	$active = ! empty( $row_active );
+	$row_active = $wpdb->get_var(
+		$wpdb->prepare(
+			"SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1",
+			'dc_gi_poll_active'
+		)
+	);
+	$active     = ! empty( $row_active );
 
 	if ( ! $active ) {
 		wp_send_json_success( array_merge( dc_gi_poll_status_data(), [ 'active' => false ] ) );
@@ -1298,28 +1450,36 @@ function dc_gi_ajax_poll_wait(): void {
 	$batch_status = dc_gi_run_poll_batch( true );
 
 	// Build fresh response directly from DB.
-	$row_poll    = $wpdb->get_var( $wpdb->prepare(
-		"SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1",
-		'_transient_dc_gi_last_poll'
-	) );
-	$last_poll   = $row_poll ? maybe_unserialize( $row_poll ) : [];
+	$row_poll  = $wpdb->get_var(
+		$wpdb->prepare(
+			"SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1",
+			'_transient_dc_gi_last_poll'
+		)
+	);
+	$last_poll = $row_poll ? maybe_unserialize( $row_poll ) : [];
 
-	$row_seen    = $wpdb->get_var( $wpdb->prepare(
-		"SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1",
-		'dc_gi_poll_seen'
-	) );
-	$row_active2 = $wpdb->get_var( $wpdb->prepare(
-		"SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1",
-		'dc_gi_poll_active'
-	) );
-	$row_queue   = $wpdb->get_var( $wpdb->prepare(
-		"SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1",
-		'dc_gi_queue'
-	) );
+	$row_seen    = $wpdb->get_var(
+		$wpdb->prepare(
+			"SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1",
+			'dc_gi_poll_seen'
+		)
+	);
+	$row_active2 = $wpdb->get_var(
+		$wpdb->prepare(
+			"SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1",
+			'dc_gi_poll_active'
+		)
+	);
+	$row_queue   = $wpdb->get_var(
+		$wpdb->prepare(
+			"SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1",
+			'dc_gi_queue'
+		)
+	);
 
-	$poll_seen   = $row_seen  ? (array) maybe_unserialize( $row_seen )  : [];
-	$is_active   = ! empty( $row_active2 );
-	$queue       = $row_queue ? (array) maybe_unserialize( $row_queue ) : [];
+	$poll_seen = $row_seen ? (array) maybe_unserialize( $row_seen ) : [];
+	$is_active = ! empty( $row_active2 );
+	$queue     = $row_queue ? (array) maybe_unserialize( $row_queue ) : [];
 
 	$settings    = dc_gi_get_settings();
 	$quota_used  = dc_gi_get_quota_used();
@@ -1328,20 +1488,26 @@ function dc_gi_ajax_poll_wait(): void {
 	$cycle_seen_w  = count( $poll_seen );
 	$cycle_total_w = $last_poll ? ( $last_poll['cycle_total'] ?? 0 ) : $cycle_seen_w;
 
-	wp_send_json_success( [
-		'active'          => $is_active,
-		'last_poll'       => $last_poll ?: null,
-		'cycle_seen'      => $cycle_seen_w,
-		'cycle_total'     => $cycle_total_w,
-		'queue_count'     => count( $queue ),
-		'batch_status'    => $batch_status,
-		'quota_used'      => $quota_used,
-		'quota_limit'     => $quota_limit,
-		'quota_exhausted' => $quota_used >= $quota_limit,
-	] );
+	wp_send_json_success(
+		[
+			'active'          => $is_active,
+			'last_poll'       => ( ! empty( $last_poll ) ) ? $last_poll : null,
+			'cycle_seen'      => $cycle_seen_w,
+			'cycle_total'     => $cycle_total_w,
+			'queue_count'     => count( $queue ),
+			'batch_status'    => $batch_status,
+			'quota_used'      => $quota_used,
+			'quota_limit'     => $quota_limit,
+			'quota_exhausted' => $quota_used >= $quota_limit,
+		]
+	);
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * Gather current polling status data for use in AJAX responses.
+ *
+ * @return array Polling status data.
+ */
 function dc_gi_poll_status_data(): array {
 	$last_poll   = get_transient( 'dc_gi_last_poll' );
 	$poll_seen   = (array) get_option( 'dc_gi_poll_seen', [] );
@@ -1355,17 +1521,17 @@ function dc_gi_poll_status_data(): array {
 	// the impossible N/0 state.
 	$cycle_total = $last_poll ? ( $last_poll['cycle_total'] ?? 0 ) : $cycle_seen;
 	return [
-		'active'           => $active,
-		'last_poll'        => $last_poll ?: null,
-		'cycle_seen'       => $cycle_seen,
-		'cycle_total'      => $cycle_total,
-		'queue_count'      => count( (array) get_option( 'dc_gi_queue', [] ) ),
-		'quota_used'       => $quota_used,
-		'quota_limit'      => $quota_limit,
-		'quota_exhausted'  => $quota_used >= $quota_limit,
-		'cache_total'      => DC_GI_URL_Cache::count_total(),
-		'cache_excluded'   => DC_GI_URL_Cache::count_excluded(),
-		'cache_age_days'   => DC_GI_URL_Cache::oldest_entry_age_days(),
+		'active'          => $active,
+		'last_poll'       => ( ! empty( $last_poll ) ) ? $last_poll : null,
+		'cycle_seen'      => $cycle_seen,
+		'cycle_total'     => $cycle_total,
+		'queue_count'     => count( (array) get_option( 'dc_gi_queue', [] ) ),
+		'quota_used'      => $quota_used,
+		'quota_limit'     => $quota_limit,
+		'quota_exhausted' => $quota_used >= $quota_limit,
+		'cache_total'     => DC_GI_URL_Cache::count_total(),
+		'cache_excluded'  => DC_GI_URL_Cache::count_excluded(),
+		'cache_age_days'  => DC_GI_URL_Cache::oldest_entry_age_days(),
 	];
 }
 
@@ -1385,16 +1551,15 @@ function dc_gi_poll_status_data(): array {
  * Watchlist whenever it finds a URL is "Discovered - currently not indexed".
  * The QA tab does not scan the full sitemap; that is Polling's responsibility.
  */
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
 function dc_gi_ajax_qa_scan_one(): void {
 	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
 	if ( ! current_user_can( 'manage_options' ) ) {
 		wp_send_json_error( 'Forbidden', 403 );
 	}
 
-	$offset   = max( 0, (int) ( isset( $_POST['offset'] ) ? wp_unslash( $_POST['offset'] ) : 0 ) );
-	$urls     = array_values( (array) get_option( 'dc_gi_qa_pending', [] ) );
-	$total    = count( $urls );
+	$offset = max( 0, (int) ( isset( $_POST['offset'] ) ? wp_unslash( $_POST['offset'] ) : 0 ) );
+	$urls   = array_values( (array) get_option( 'dc_gi_qa_pending', [] ) );
+	$total  = count( $urls );
 
 	if ( empty( $urls ) ) {
 		wp_send_json_error( 'no_pending' );
@@ -1403,7 +1568,13 @@ function dc_gi_ajax_qa_scan_one(): void {
 	if ( $offset >= $total ) {
 		delete_option( 'dc_gi_qa_active' );
 		delete_option( 'dc_gi_qa_offset' );
-		wp_send_json_success( [ 'done' => true, 'total' => $total, 'offset' => $total ] );
+		wp_send_json_success(
+			[
+				'done'   => true,
+				'total'  => $total,
+				'offset' => $total,
+			]
+		);
 	}
 
 	$url = $urls[ $offset ];
@@ -1412,18 +1583,18 @@ function dc_gi_ajax_qa_scan_one(): void {
 	update_option( 'dc_gi_qa_active', true, false );
 	update_option( 'dc_gi_qa_offset', $offset, false );
 
-	$issues       = [];
-	$http_status  = 0;
-	$title        = '';
-	$meta_desc    = '';
-	$h1           = '';
-	$canonical        = '';
-	$robots           = '';
-	$content_hash     = '';
-	$short_desc       = '';
-	$short_desc_hash  = '';
-	$title_hash       = '';
-	$word_count       = 0;
+	$issues          = [];
+	$http_status     = 0;
+	$title           = '';
+	$meta_desc       = '';
+	$h1              = '';
+	$canonical       = '';
+	$robots          = '';
+	$content_hash    = '';
+	$short_desc      = '';
+	$short_desc_hash = '';
+	$title_hash      = '';
+	$word_count      = 0;
 
 	// Fetch the page.
 	$response = wp_remote_get(
@@ -1540,8 +1711,30 @@ function dc_gi_ajax_qa_scan_one(): void {
 			// exist in the page body (guards against hardcoded SEO titles unrelated
 			// to the actual product content).
 			if ( '' !== $title ) {
-				$stop_words  = [ 'a','an','the','and','or','of','in','on','to','for',
-					'at','by','with','from','as','is','are','was','were','be','it','its' ];
+				$stop_words  = [
+					'a',
+					'an',
+					'the',
+					'and',
+					'or',
+					'of',
+					'in',
+					'on',
+					'to',
+					'for',
+					'at',
+					'by',
+					'with',
+					'from',
+					'as',
+					'is',
+					'are',
+					'was',
+					'were',
+					'be',
+					'it',
+					'its',
+				];
 				$title_words = array_filter(
 					array_map( 'mb_strtolower', preg_split( '/[\W]+/u', $title, -1, PREG_SPLIT_NO_EMPTY ) ),
 					static fn( $w ) => mb_strlen( $w, 'UTF-8' ) >= 3 && ! in_array( $w, $stop_words, true )
@@ -1551,7 +1744,7 @@ function dc_gi_ajax_qa_scan_one(): void {
 				$matches     = 0;
 				foreach ( $title_words as $tw ) {
 					if ( false !== mb_strpos( $body_lower, $tw ) ) {
-						$matches++;
+						++$matches;
 					}
 				}
 				if ( count( $title_words ) > 0 && $matches < 2 ) {
@@ -1590,14 +1783,14 @@ function dc_gi_ajax_qa_scan_one(): void {
 	// Persist this URL's result.
 	$results         = (array) get_option( 'dc_gi_qa_results', [] );
 	$results[ $url ] = [
-		'url'          => $url,
-		'http_status'  => $http_status,
-		'issues'       => array_values( array_unique( $issues ) ),
-		'title'        => $title,
-		'meta_desc'    => $meta_desc,
-		'h1'           => $h1,
-		'canonical'    => $canonical,
-		'robots'       => $robots,
+		'url'             => $url,
+		'http_status'     => $http_status,
+		'issues'          => array_values( array_unique( $issues ) ),
+		'title'           => $title,
+		'meta_desc'       => $meta_desc,
+		'h1'              => $h1,
+		'canonical'       => $canonical,
+		'robots'          => $robots,
 		'content_hash'    => $content_hash,
 		'short_desc'      => $short_desc,
 		'short_desc_hash' => $short_desc_hash,
@@ -1687,21 +1880,25 @@ function dc_gi_ajax_qa_scan_one(): void {
 		update_option( 'dc_gi_qa_offset', $next, false );
 	}
 
-	wp_send_json_success( [
-		'done'        => $done,
-		'offset'      => $offset,
-		'next'        => $next,
-		'total'       => $total,
-		'url'         => $url,
-		'http_status' => $http_status,
-		'issues'      => array_values( array_unique( $issues ) ),
-		'title'       => $title,
-		'meta_desc'   => $meta_desc,
-		'word_count'  => $word_count,
-	] );
+	wp_send_json_success(
+		[
+			'done'        => $done,
+			'offset'      => $offset,
+			'next'        => $next,
+			'total'       => $total,
+			'url'         => $url,
+			'http_status' => $http_status,
+			'issues'      => array_values( array_unique( $issues ) ),
+			'title'       => $title,
+			'meta_desc'   => $meta_desc,
+			'word_count'  => $word_count,
+		]
+	);
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * AJAX: Stop the QA scan and clear the active flag.
+ */
 function dc_gi_ajax_qa_stop(): void {
 	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
 	if ( ! current_user_can( 'manage_options' ) ) {
@@ -1712,7 +1909,9 @@ function dc_gi_ajax_qa_stop(): void {
 	wp_send_json_success();
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * Handle the clear-QA-results form action.
+ */
 function dc_gi_handle_qa_clear(): void {
 	check_admin_referer( 'dc_gi_qa_clear' );
 	if ( ! current_user_can( 'manage_options' ) ) {
@@ -1722,28 +1921,39 @@ function dc_gi_handle_qa_clear(): void {
 	delete_option( 'dc_gi_qa_active' );
 	delete_option( 'dc_gi_qa_offset' );
 	delete_option( 'dc_gi_qa_pending' );
-	wp_safe_redirect( add_query_arg(
-		[ 'page' => 'dc-google-indexing', 'tab' => 'qa' ],
-		admin_url( 'admin.php' )
-	) );
+	wp_safe_redirect(
+		add_query_arg(
+			[
+				'page' => 'dc-google-indexing',
+				'tab'  => 'qa',
+			],
+			admin_url( 'admin.php' )
+		)
+	);
 	exit;
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * AJAX: Return URL cache verdict and coverage breakdown for the index-status widget.
+ */
 function dc_gi_ajax_index_status(): void {
 	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
 	if ( ! current_user_can( 'manage_options' ) ) {
 		wp_send_json_error( 'Forbidden', 403 );
 	}
-	wp_send_json_success( [
-		'verdicts' => DC_GI_URL_Cache::get_verdict_counts(),
-		'coverage' => DC_GI_URL_Cache::get_coverage_state_breakdown(),
-		'total'    => DC_GI_URL_Cache::count_total(),
-		'age_days' => DC_GI_URL_Cache::oldest_entry_age_days(),
-	] );
+	wp_send_json_success(
+		[
+			'verdicts' => DC_GI_URL_Cache::get_verdict_counts(),
+			'coverage' => DC_GI_URL_Cache::get_coverage_state_breakdown(),
+			'total'    => DC_GI_URL_Cache::count_total(),
+			'age_days' => DC_GI_URL_Cache::oldest_entry_age_days(),
+		]
+	);
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * Handle the reset-poll-cycle form action.
+ */
 function dc_gi_handle_poll_reset(): void {
 	check_admin_referer( 'dc_gi_poll_reset' );
 	if ( ! current_user_can( 'manage_options' ) ) {
@@ -1762,14 +1972,22 @@ function dc_gi_handle_poll_reset(): void {
 	delete_option( '_transient_timeout_dc_gi_last_poll' );
 	wp_cache_delete( 'dc_gi_last_poll', 'transient' );
 
-	wp_safe_redirect( add_query_arg(
-		[ 'page' => 'dc-google-indexing', 'tab' => 'polling', 'notice' => 'poll_reset' ],
-		admin_url( 'admin.php' )
-	) );
+	wp_safe_redirect(
+		add_query_arg(
+			[
+				'page'   => 'dc-google-indexing',
+				'tab'    => 'polling',
+				'notice' => 'poll_reset',
+			],
+			admin_url( 'admin.php' )
+		)
+	);
 	exit;
 }
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * Handle the clear-URL-cache form action.
+ */
 function dc_gi_handle_cache_clear(): void {
 	check_admin_referer( 'dc_gi_cache_clear' );
 	if ( ! current_user_can( 'manage_options' ) ) {
@@ -1778,10 +1996,16 @@ function dc_gi_handle_cache_clear(): void {
 
 	DC_GI_URL_Cache::truncate();
 
-	wp_safe_redirect( add_query_arg(
-		[ 'page' => 'dc-google-indexing', 'tab' => 'polling', 'notice' => 'cache_cleared' ],
-		admin_url( 'admin.php' )
-	) );
+	wp_safe_redirect(
+		add_query_arg(
+			[
+				'page'   => 'dc-google-indexing',
+				'tab'    => 'polling',
+				'notice' => 'cache_cleared',
+			],
+			admin_url( 'admin.php' )
+		)
+	);
 	exit;
 }
 
@@ -1789,13 +2013,15 @@ function dc_gi_handle_cache_clear(): void {
 // RENDER PAGE
 // =============================================================================
 
-// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+/**
+ * Render the plugin's admin page (all tabs).
+ */
 function dc_gi_render_page(): void {
 	if ( ! current_user_can( 'manage_options' ) ) {
 		return;
 	}
 
-	$settings    = dc_gi_get_settings();
+	$settings = dc_gi_get_settings();
 	// Bypass Redis persistent object cache so the queue count is always fresh.
 	wp_cache_delete( 'dc_gi_queue', 'options' );
 	$queue       = get_option( 'dc_gi_queue', [] );
@@ -1824,39 +2050,45 @@ function dc_gi_render_page(): void {
 	$qa_pending = (array) get_option( 'dc_gi_qa_pending', [] );
 
 	$notices = [
-		'saved'           => [ 'success', __( 'Settings saved.', 'dc-google-indexing' ) ],
-		'invalid_json'    => [ 'error',   __( 'Invalid JSON — ensure it contains client_email and private_key.', 'dc-google-indexing' ) ],
-		'queued'          => [ 'success', sprintf(
-			/* translators: %d: number of URLs added to queue */
-			__( '%d URL(s) added to queue.', 'dc-google-indexing' ),
-			$queued_count
-		) ],
-		'processed'       => [ 'success', __( 'Queue processed.', 'dc-google-indexing' ) ],
-		'queue_cleared'   => [ 'success', __( 'Queue cleared.', 'dc-google-indexing' ) ],
-		'log_cleared'     => [ 'success', __( 'Log cleared.', 'dc-google-indexing' ) ],
-		'test_ok'         => [ 'success', __( '&#10003; Connection successful — credentials are valid.', 'dc-google-indexing' ) ],
-		'test_fail'       => [ 'error',   esc_html( $errmsg ) ?: __( 'Connection failed.', 'dc-google-indexing' ) ],
-		'test_no_sa'      => [ 'error',   __( 'No service account saved. Paste your JSON and save first.', 'dc-google-indexing' ) ],
-		'poll_no_sitemap' => [ 'error',   esc_html( $errmsg ) ?: __( 'No sitemap found. Ensure your site has a public XML sitemap.', 'dc-google-indexing' ) ],
-		'poll_error'      => [ 'error',   esc_html( $errmsg ) ?: __( 'Polling failed.', 'dc-google-indexing' ) ],
-		'watch_cleared'        => [ 'success', __( 'Watchlist cleared.', 'dc-google-indexing' ) ],
-		'watch_indexed_cleared' => [ 'success', sprintf(
-			/* translators: %d: number of indexed URLs removed from watchlist */
-			__( '%d indexed URL(s) removed from watchlist.', 'dc-google-indexing' ),
-			absint( isset( $_GET['count'] ) ? wp_unslash( $_GET['count'] ) : 0 ) // phpcs:ignore WordPress.Security.NonceVerification.Recommended
-		) ],
-		'watch_checked'   => [ 'success', __( 'Watchlist check complete.', 'dc-google-indexing' ) ],
-		'cron_fixed'      => [ 'success', __( 'Watchlist auto-check schedule restored.', 'dc-google-indexing' ) ],
-		'poll_reset'      => [ 'success', __( 'Poll cycle reset — next run will start from the beginning of the sitemap.', 'dc-google-indexing' ) ],
-		'cache_cleared'   => [ 'success', __( 'Inspection cache cleared — the background cron will rebuild it automatically.', 'dc-google-indexing' ) ],
+		'saved'                 => [ 'success', __( 'Settings saved.', 'dc-google-indexing' ) ],
+		'invalid_json'          => [ 'error', __( 'Invalid JSON — ensure it contains client_email and private_key.', 'dc-google-indexing' ) ],
+		'queued'                => [
+			'success',
+			sprintf(
+								/* translators: %d: number of URLs added to queue */
+				__( '%d URL(s) added to queue.', 'dc-google-indexing' ),
+				$queued_count
+			),
+		],
+		'processed'             => [ 'success', __( 'Queue processed.', 'dc-google-indexing' ) ],
+		'queue_cleared'         => [ 'success', __( 'Queue cleared.', 'dc-google-indexing' ) ],
+		'log_cleared'           => [ 'success', __( 'Log cleared.', 'dc-google-indexing' ) ],
+		'test_ok'               => [ 'success', __( '&#10003; Connection successful — credentials are valid.', 'dc-google-indexing' ) ],
+		'test_fail'             => [ 'error', ( ! empty( esc_html( $errmsg ) ) ) ? esc_html( $errmsg ) : __( 'Connection failed.', 'dc-google-indexing' ) ],
+		'test_no_sa'            => [ 'error', __( 'No service account saved. Paste your JSON and save first.', 'dc-google-indexing' ) ],
+		'poll_no_sitemap'       => [ 'error', ( ! empty( esc_html( $errmsg ) ) ) ? esc_html( $errmsg ) : __( 'No sitemap found. Ensure your site has a public XML sitemap.', 'dc-google-indexing' ) ],
+		'poll_error'            => [ 'error', ( ! empty( esc_html( $errmsg ) ) ) ? esc_html( $errmsg ) : __( 'Polling failed.', 'dc-google-indexing' ) ],
+		'watch_cleared'         => [ 'success', __( 'Watchlist cleared.', 'dc-google-indexing' ) ],
+		'watch_indexed_cleared' => [
+			'success',
+			sprintf(
+							/* translators: %d: number of indexed URLs removed from watchlist */
+				__( '%d indexed URL(s) removed from watchlist.', 'dc-google-indexing' ),
+				absint( isset( $_GET['count'] ) ? wp_unslash( $_GET['count'] ) : 0 ) // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			),
+		],
+		'watch_checked'         => [ 'success', __( 'Watchlist check complete.', 'dc-google-indexing' ) ],
+		'cron_fixed'            => [ 'success', __( 'Watchlist auto-check schedule restored.', 'dc-google-indexing' ) ],
+		'poll_reset'            => [ 'success', __( 'Poll cycle reset — next run will start from the beginning of the sitemap.', 'dc-google-indexing' ) ],
+		'cache_cleared'         => [ 'success', __( 'Inspection cache cleared — the background cron will rebuild it automatically.', 'dc-google-indexing' ) ],
 	];
 
 	$all_post_types = get_post_types( [ 'public' => true ], 'objects' );
 	?>
 	<style id="dc-gi-theme">
 	/* ===================================================
-	   DC Google Indexing — Dark Dashboard Theme
-	   =================================================== */
+		DC Google Indexing — Dark Dashboard Theme
+		=================================================== */
 	.dc-gi-admin{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
 	.dc-gi-page-title{display:flex;align-items:center;gap:12px;background:linear-gradient(135deg,#161825 0%,#1e2236 100%);color:#e4e8f3;padding:18px 26px;margin:8px 0 0;border:1px solid #2d3555;border-bottom:none;border-radius:6px 6px 0 0;font-size:20px;font-weight:700;letter-spacing:-.2px}
 	.dc-gi-page-title .dashicons{color:#1d8cf8;font-size:26px;line-height:1;width:26px;height:26px}
@@ -1978,8 +2210,8 @@ function dc_gi_render_page(): void {
 	.dc-gi-wl-flash{animation:dcGiWlFlash .9s ease-out}
 	@keyframes dcGiWlFlash{0%{background:rgba(29,140,248,.22)}100%{background:transparent}}
 	/* ===================================================
-	   Responsive — constrain to viewport on small screens
-	   =================================================== */
+		Responsive — constrain to viewport on small screens
+		=================================================== */
 	.dc-gi-admin,.dc-gi-admin *,.dc-gi-admin *::before,.dc-gi-admin *::after{box-sizing:border-box}
 	@media screen and (max-width:782px){
 	.dc-gi-page-title{padding:14px 16px;font-size:17px}
@@ -2046,20 +2278,28 @@ function dc_gi_render_page(): void {
 		<nav class="nav-tab-wrapper">
 			<?php
 			$tabs = [
-				'start'     => __( '🚀 Getting Started', 'dc-google-indexing' ),
-				'settings'  => __( 'Settings', 'dc-google-indexing' ),
-				'submit'    => __( 'Submit URLs', 'dc-google-indexing' ),
-				'queue'     => __( 'Queue', 'dc-google-indexing' ),
-				'watchlist' => __( '👁 Watchlist', 'dc-google-indexing' ),
-				'polling'   => __( '📡 Polling', 'dc-google-indexing' ),
-				'log'       => __( 'Log', 'dc-google-indexing' ),
-				'qa'        => __( '🔍 Quality Assurance', 'dc-google-indexing' ),
+				'start'        => __( '🚀 Getting Started', 'dc-google-indexing' ),
+				'settings'     => __( 'Settings', 'dc-google-indexing' ),
+				'submit'       => __( 'Submit URLs', 'dc-google-indexing' ),
+				'queue'        => __( 'Queue', 'dc-google-indexing' ),
+				'watchlist'    => __( '👁 Watchlist', 'dc-google-indexing' ),
+				'polling'      => __( '📡 Polling', 'dc-google-indexing' ),
+				'log'          => __( 'Log', 'dc-google-indexing' ),
+				'qa'           => __( '🔍 Quality Assurance', 'dc-google-indexing' ),
 				'index_status' => __( '📊 Index Status', 'dc-google-indexing' ),
 			];
 			foreach ( $tabs as $t => $label ) {
 				printf(
 					'<a href="%s" class="nav-tab %s">%s</a>',
-					esc_url( add_query_arg( [ 'page' => 'dc-google-indexing', 'tab' => $t ], admin_url( 'admin.php' ) ) ),
+					esc_url(
+						add_query_arg(
+							[
+								'page' => 'dc-google-indexing',
+								'tab'  => $t,
+							],
+							admin_url( 'admin.php' )
+						)
+					),
 					$tab === $t ? 'nav-tab-active' : '',
 					esc_html( $label )
 				);
@@ -2126,23 +2366,24 @@ function dc_gi_render_page(): void {
 		</p>
 
 		<!-- Progress bar -->
-		<?php
-		$step_done = [ false, false, false, false, false ];
-		if ( $has_sa ) {
-			$step_done = [ true, true, true, true, true ];
-		}
-		$step_labels = [
-			__( 'Cloud Project', 'dc-google-indexing' ),
-			__( 'Enable API', 'dc-google-indexing' ),
-			__( 'Service Account', 'dc-google-indexing' ),
-			__( 'Search Console', 'dc-google-indexing' ),
-			__( 'Connect', 'dc-google-indexing' ),
-		];
-		?>
-		<div class="dc-gi-progress">
-			<?php foreach ( $step_labels as $i => $slabel ) :
-				$class = $step_done[ $i ] ? 'done' : ( ! $has_sa && $i === 0 ? 'active' : '' );
+			<?php
+			$step_done = [ false, false, false, false, false ];
+			if ( $has_sa ) {
+				$step_done = [ true, true, true, true, true ];
+			}
+			$step_labels = [
+				__( 'Cloud Project', 'dc-google-indexing' ),
+				__( 'Enable API', 'dc-google-indexing' ),
+				__( 'Service Account', 'dc-google-indexing' ),
+				__( 'Search Console', 'dc-google-indexing' ),
+				__( 'Connect', 'dc-google-indexing' ),
+			];
 			?>
+		<div class="dc-gi-progress">
+			<?php
+			foreach ( $step_labels as $i => $slabel ) :
+				$class = $step_done[ $i ] ? 'done' : ( ! $has_sa && 0 === $i ? 'active' : '' );
+				?>
 			<div class="dc-gi-progress-step <?php echo esc_attr( $class ); ?>">
 				<div class="dc-gi-progress-dot"><?php echo $step_done[ $i ] ? '✓' : esc_html( (string) ( $i + 1 ) ); ?></div>
 				<div class="dc-gi-progress-label"><?php echo esc_html( $slabel ); ?></div>
@@ -2400,10 +2641,34 @@ function dc_gi_render_page(): void {
 				</div>
 
 				<div class="dc-gi-btn-row">
-					<a href="<?php echo esc_url( add_query_arg( [ 'page' => 'dc-google-indexing', 'tab' => 'submit' ], admin_url( 'admin.php' ) ) ); ?>" class="button button-primary">
+					<a href="
+					<?php
+					echo esc_url(
+						add_query_arg(
+							[
+								'page' => 'dc-google-indexing',
+								'tab'  => 'submit',
+							],
+							admin_url( 'admin.php' )
+						)
+					);
+					?>
+								" class="button button-primary">
 						<?php esc_html_e( '→ Submit URLs now', 'dc-google-indexing' ); ?>
 					</a>
-					<a href="<?php echo esc_url( add_query_arg( [ 'page' => 'dc-google-indexing', 'tab' => 'settings' ], admin_url( 'admin.php' ) ) ); ?>" class="button">
+					<a href="
+					<?php
+					echo esc_url(
+						add_query_arg(
+							[
+								'page' => 'dc-google-indexing',
+								'tab'  => 'settings',
+							],
+							admin_url( 'admin.php' )
+						)
+					);
+					?>
+								" class="button">
 						<?php esc_html_e( '→ Review Settings', 'dc-google-indexing' ); ?>
 					</a>
 				</div>
@@ -2538,7 +2803,7 @@ function dc_gi_render_page(): void {
 						<?php
 						$saved_types = $settings['post_types'] ?? [ 'post', 'page' ];
 						foreach ( $all_post_types as $pt ) :
-						?>
+							?>
 						<label style="display:block;margin-bottom:4px">
 							<input type="checkbox" name="post_types[]" value="<?php echo esc_attr( $pt->name ); ?>" <?php checked( in_array( $pt->name, $saved_types, true ) ); ?>>
 							<?php echo esc_html( $pt->label . ' (' . $pt->name . ')' ); ?>
@@ -2594,7 +2859,19 @@ function dc_gi_render_page(): void {
 		<hr style="margin:20px 0">
 
 		<p>
-			<a href="<?php echo esc_url( add_query_arg( [ 'page' => 'dc-google-indexing', 'tab' => 'start' ], admin_url( 'admin.php' ) ) ); ?>">
+			<a href="
+			<?php
+			echo esc_url(
+				add_query_arg(
+					[
+						'page' => 'dc-google-indexing',
+						'tab'  => 'start',
+					],
+					admin_url( 'admin.php' )
+				)
+			);
+			?>
+						">
 				<?php esc_html_e( '← View the Getting Started guide', 'dc-google-indexing' ); ?>
 			</a>
 		</p>
@@ -2654,7 +2931,7 @@ function dc_gi_render_page(): void {
 			<button type="submit" class="button"><?php esc_html_e( 'Clear Queue', 'dc-google-indexing' ); ?></button>
 		</form>
 
-		<?php if ( ! empty( $queue ) ) : ?>
+			<?php if ( ! empty( $queue ) ) : ?>
 		<table class="widefat striped" style="margin-top:16px">
 			<thead>
 				<tr>
@@ -2684,13 +2961,13 @@ function dc_gi_render_page(): void {
 			<?php esc_html_e( 'Every URL successfully submitted to Google is tracked here. Status is checked automatically every 6 hours via WP-Cron and updated when Google reports the page as indexed. URLs already in the Watchlist are skipped during Polling to avoid wasting inspection quota.', 'dc-google-indexing' ); ?>
 		</p>
 
-		<?php
-		$watch_pending         = array_filter( $watchlist, fn( $e ) => 'pending' === $e['status'] );
-		$watch_indexed         = array_filter( $watchlist, fn( $e ) => 'indexed' === $e['status'] );
-		$watch_removal_pending = array_filter( $watchlist, fn( $e ) => 'removal_pending' === $e['status'] );
-		$watch_removed         = array_filter( $watchlist, fn( $e ) => 'removed' === $e['status'] );
-		$next_watch    = wp_next_scheduled( DC_GI_WATCH_HOOK );
-		?>
+			<?php
+			$watch_pending         = array_filter( $watchlist, fn( $e ) => 'pending' === $e['status'] );
+			$watch_indexed         = array_filter( $watchlist, fn( $e ) => 'indexed' === $e['status'] );
+			$watch_removal_pending = array_filter( $watchlist, fn( $e ) => 'removal_pending' === $e['status'] );
+			$watch_removed         = array_filter( $watchlist, fn( $e ) => 'removed' === $e['status'] );
+			$next_watch            = wp_next_scheduled( DC_GI_WATCH_HOOK );
+			?>
 
 		<div style="display:flex;gap:12px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
 			<!-- Running/Stopped badge — updated live by JS -->
@@ -2723,11 +3000,13 @@ function dc_gi_render_page(): void {
 			<?php endif; ?>
 			<span class="dc-gi-wl-next">
 				<?php if ( $next_watch ) : ?>
-					<?php printf(
+					<?php
+					printf(
 						/* translators: %s: human-readable time until next auto-check */
 						esc_html__( 'Next auto-check in %s', 'dc-google-indexing' ),
 						esc_html( human_time_diff( time(), $next_watch ) )
-					); ?>
+					);
+					?>
 				<?php else : ?>
 					<span style="color:#fd5d93"><?php esc_html_e( '⚠️ Auto-check not scheduled', 'dc-google-indexing' ); ?></span>
 				<?php endif; ?>
@@ -2784,7 +3063,7 @@ function dc_gi_render_page(): void {
 			<?php endif; ?>
 		</div>
 
-		<?php if ( empty( $watchlist ) ) : ?>
+			<?php if ( empty( $watchlist ) ) : ?>
 		<p style="color:#777"><?php esc_html_e( 'No URLs tracked yet. Submit URLs to Google and they will appear here automatically.', 'dc-google-indexing' ); ?></p>
 		<?php else : ?>
 		<table class="widefat striped" style="margin-top:0">
@@ -2799,13 +3078,14 @@ function dc_gi_render_page(): void {
 				</tr>
 			</thead>
 			<tbody id="dc-gi-wl-tbody">
-				<?php foreach ( $watchlist as $entry ) :
+				<?php
+				foreach ( $watchlist as $entry ) :
 					$badge_class = in_array( $entry['status'], [ 'pending', 'indexed', 'error', 'removal_pending', 'removed' ], true )
 						? $entry['status'] : 'pending';
 					$badge_label = 'removal_pending' === $entry['status']
 						? __( 'Removal Pending', 'dc-google-indexing' )
 						: ucfirst( $entry['status'] );
-				?>
+					?>
 				<tr data-wl-url="<?php echo esc_attr( $entry['url'] ); ?>">
 					<td>
 						<a href="<?php echo esc_url( $entry['url'] ); ?>" target="_blank" rel="noopener noreferrer">
@@ -2813,7 +3093,7 @@ function dc_gi_render_page(): void {
 						</a>
 					</td>
 					<td><span class="dc-gi-wl-badge <?php echo esc_attr( $badge_class ); ?>"><?php echo esc_html( $badge_label ); ?></span></td>
-					<td><?php echo esc_html( $entry['coverage'] ?: '—' ); ?></td>
+					<td><?php echo esc_html( ( ! empty( $entry['coverage'] ) ) ? $entry['coverage'] : '—' ); ?></td>
 					<td><?php echo esc_html( wp_date( 'Y-m-d H:i', $entry['submitted_at'] ) ); ?></td>
 					<td><?php echo $entry['last_checked'] ? esc_html( wp_date( 'Y-m-d H:i', $entry['last_checked'] ) ) : '—'; ?></td>
 					<td>
@@ -2857,11 +3137,11 @@ function dc_gi_render_page(): void {
 			</div>
 		</div>
 
-		<?php
-		$cache_total    = DC_GI_URL_Cache::count_total();
-		$cache_excluded = DC_GI_URL_Cache::count_excluded();
-		$cache_age      = DC_GI_URL_Cache::oldest_entry_age_days();
-		?>
+			<?php
+			$cache_total    = DC_GI_URL_Cache::count_total();
+			$cache_excluded = DC_GI_URL_Cache::count_excluded();
+			$cache_age      = DC_GI_URL_Cache::oldest_entry_age_days();
+			?>
 		<div class="dc-gi-callout" style="background:#1a1f38;border-color:#2a3055;margin-bottom:16px;display:flex;align-items:center;gap:32px;flex-wrap:wrap">
 			<div>
 				<span style="font-size:11px;color:#7a8499;display:block;margin-bottom:2px"><?php esc_html_e( 'Inspection cache', 'dc-google-indexing' ); ?></span>
@@ -2909,48 +3189,64 @@ function dc_gi_render_page(): void {
 			</div>
 		</div>
 
-		<?php
-		$php_inspected = $last_poll ? (int) ( $last_poll['cycle_inspected'] ?? $last_poll['inspected'] ?? 0 ) : 0;
-		$php_queued    = $last_poll ? (int) ( $last_poll['cycle_queued']    ?? $last_poll['queued']    ?? 0 ) : 0;
-		$php_skipped   = $last_poll ? (int) ( $last_poll['cycle_skipped']   ?? $last_poll['skipped']   ?? 0 ) : 0;
-		$php_errors    = $last_poll ? (int) ( $last_poll['cycle_errors']    ?? $last_poll['errors']    ?? 0 ) : 0;
-		$php_seen      = $last_poll ? (int) ( $last_poll['cycle_seen']  ?? 0 ) : 0;
-		$php_total     = $last_poll ? (int) ( $last_poll['cycle_total'] ?? 0 ) : 0;
-		$php_pct       = $php_total > 0 ? round( $php_seen / $php_total * 100 ) : 0;
-		$php_done      = $last_poll && ! empty( $last_poll['cycle_done'] );
-		$php_time      = $last_poll ? wp_date( 'H:i:s', $last_poll['time'] ) : '';
-		?>
+			<?php
+			$php_inspected = $last_poll ? (int) ( $last_poll['cycle_inspected'] ?? $last_poll['inspected'] ?? 0 ) : 0;
+			$php_queued    = $last_poll ? (int) ( $last_poll['cycle_queued'] ?? $last_poll['queued'] ?? 0 ) : 0;
+			$php_skipped   = $last_poll ? (int) ( $last_poll['cycle_skipped'] ?? $last_poll['skipped'] ?? 0 ) : 0;
+			$php_errors    = $last_poll ? (int) ( $last_poll['cycle_errors'] ?? $last_poll['errors'] ?? 0 ) : 0;
+			$php_seen      = $last_poll ? (int) ( $last_poll['cycle_seen'] ?? 0 ) : 0;
+			$php_total     = $last_poll ? (int) ( $last_poll['cycle_total'] ?? 0 ) : 0;
+			$php_pct       = $php_total > 0 ? round( $php_seen / $php_total * 100 ) : 0;
+			$php_done      = $last_poll && ! empty( $last_poll['cycle_done'] );
+			$php_time      = $last_poll ? wp_date( 'H:i:s', $last_poll['time'] ) : '';
+			?>
 
 		<h3 style="margin-bottom:4px"><?php esc_html_e( 'Run Polling', 'dc-google-indexing' ); ?></h3>
 		<p style="color:#555;font-size:13px;margin-top:0">
-			<?php echo wp_kses_post( sprintf(
+			<?php
+			echo wp_kses_post(
+				sprintf(
 				/* translators: %s: URL to site home */
-				__( 'Site URL detected: <code>%s</code>. This must match your Search Console property.', 'dc-google-indexing' ),
-				esc_html( trailingslashit( get_home_url() ) )
-			) ); ?>
+					__( 'Site URL detected: <code>%s</code>. This must match your Search Console property.', 'dc-google-indexing' ),
+					esc_html( trailingslashit( get_home_url() ) )
+				)
+			);
+			?>
 		</p>
 
-		<?php if ( ! $has_sa ) : ?>
+			<?php if ( ! $has_sa ) : ?>
 		<div class="dc-gi-callout err">
-			<?php echo wp_kses_post( sprintf(
-				/* translators: %s: link to settings tab */
-				__( 'No service account configured. <a href="%s">Go to Settings</a> to connect your Google Cloud credentials first.', 'dc-google-indexing' ),
-				esc_url( add_query_arg( [ 'page' => 'dc-google-indexing', 'tab' => 'settings' ], admin_url( 'admin.php' ) ) )
-			) ); ?>
+				<?php
+				echo wp_kses_post(
+					sprintf(
+					/* translators: %s: link to settings tab */
+						__( 'No service account configured. <a href="%s">Go to Settings</a> to connect your Google Cloud credentials first.', 'dc-google-indexing' ),
+						esc_url(
+							add_query_arg(
+								[
+									'page' => 'dc-google-indexing',
+									'tab'  => 'settings',
+								],
+								admin_url( 'admin.php' )
+							)
+						)
+					)
+				);
+				?>
 		</div>
 		<?php else : ?>
 
-		<?php if ( dc_gi_is_quota_exhausted() ) : ?>
+			<?php if ( dc_gi_is_quota_exhausted() ) : ?>
 		<div class="dc-gi-callout err" style="margin-bottom:16px">
 			<strong><?php esc_html_e( '🚫 Daily quota exhausted', 'dc-google-indexing' ); ?></strong> &mdash;
-			<?php
-			printf(
+				<?php
+				printf(
 				/* translators: 1: used count, 2: limit */
-				esc_html__( '%1$d / %2$d submissions used today. Polling is paused until quota resets at midnight UTC.', 'dc-google-indexing' ),
-				esc_html( (string) $quota_used ),
-				esc_html( (string) $quota_limit )
-			);
-			?>
+					esc_html__( '%1$d / %2$d submissions used today. Polling is paused until quota resets at midnight UTC.', 'dc-google-indexing' ),
+					esc_html( (string) $quota_used ),
+					esc_html( (string) $quota_limit )
+				);
+				?>
 		</div>
 		<?php endif; ?>
 
@@ -3050,7 +3346,7 @@ function dc_gi_render_page(): void {
 			<button type="submit" class="button"><?php esc_html_e( 'Clear Log', 'dc-google-indexing' ); ?></button>
 		</form>
 
-		<?php if ( empty( $log ) ) : ?>
+			<?php if ( empty( $log ) ) : ?>
 			<p><?php esc_html_e( 'No submissions logged yet.', 'dc-google-indexing' ); ?></p>
 		<?php else : ?>
 		<table class="widefat striped">
@@ -3064,10 +3360,11 @@ function dc_gi_render_page(): void {
 				</tr>
 			</thead>
 			<tbody>
-				<?php foreach ( $log as $entry ) :
+				<?php
+				foreach ( $log as $entry ) :
 					$is_ownership_err = ( 'error' === $entry['status'] )
 						&& false !== stripos( $entry['detail'], 'URL ownership' );
-				?>
+					?>
 				<tr>
 					<td><?php echo esc_html( wp_date( 'Y-m-d H:i:s', $entry['time'] ) ); ?></td>
 					<td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="<?php echo esc_attr( $entry['url'] ); ?>">
@@ -3086,7 +3383,19 @@ function dc_gi_render_page(): void {
 					<td>
 						<?php if ( $is_ownership_err ) : ?>
 							<span style="color:#dc3232"><?php esc_html_e( 'Permission denied: service account not verified as property owner.', 'dc-google-indexing' ); ?></span>
-							<a href="<?php echo esc_url( add_query_arg( [ 'page' => 'dc-google-indexing', 'tab' => 'start' ], admin_url( 'admin.php' ) ) ); ?>#step-4" style="margin-left:6px;white-space:nowrap">
+							<a href="
+							<?php
+							echo esc_url(
+								add_query_arg(
+									[
+										'page' => 'dc-google-indexing',
+										'tab'  => 'start',
+									],
+									admin_url( 'admin.php' )
+								)
+							);
+							?>
+										#step-4" style="margin-left:6px;white-space:nowrap">
 								<?php esc_html_e( '→ Fix: Step 4', 'dc-google-indexing' ); ?>
 							</a>
 						<?php else : ?>
@@ -3119,69 +3428,71 @@ function dc_gi_render_page(): void {
 			</div>
 		</div>
 
-		<?php
-		// Compute summary stats from stored results.
-		$qa_total        = count( $qa_results );
-		$qa_with_issues  = 0;
-		$qa_clean        = 0;
-		$qa_issue_counts = [];
-		foreach ( $qa_results as $qa_entry ) {
-			if ( ! empty( $qa_entry['issues'] ) ) {
-				++$qa_with_issues;
-				foreach ( $qa_entry['issues'] as $issue_type ) {
-					$qa_issue_counts[ $issue_type ] = ( $qa_issue_counts[ $issue_type ] ?? 0 ) + 1;
+			<?php
+			// Compute summary stats from stored results.
+			$qa_total        = count( $qa_results );
+			$qa_with_issues  = 0;
+			$qa_clean        = 0;
+			$qa_issue_counts = [];
+			foreach ( $qa_results as $qa_entry ) {
+				if ( ! empty( $qa_entry['issues'] ) ) {
+					++$qa_with_issues;
+					foreach ( $qa_entry['issues'] as $issue_type ) {
+						$qa_issue_counts[ $issue_type ] = ( $qa_issue_counts[ $issue_type ] ?? 0 ) + 1;
+					}
+				} else {
+					++$qa_clean;
 				}
-			} else {
-				++$qa_clean;
 			}
-		}
 
-		$qa_issue_labels = [
-			'fetch_error'          => __( 'Fetch Error', 'dc-google-indexing' ),
-			'not_found'            => __( '404 Not Found', 'dc-google-indexing' ),
-			'http_error'           => __( 'HTTP Error', 'dc-google-indexing' ),
-			'redirect'             => __( 'Redirect', 'dc-google-indexing' ),
-			'noindex'              => __( 'Noindex', 'dc-google-indexing' ),
-			'missing_title'        => __( 'Missing Title', 'dc-google-indexing' ),
-			'missing_meta_desc'    => __( 'Missing Meta Desc', 'dc-google-indexing' ),
-			'short_meta_desc'      => __( 'Short Meta Desc (≤80)', 'dc-google-indexing' ),
-			'missing_h1'           => __( 'Missing H1', 'dc-google-indexing' ),
-			'non_canonical'        => __( 'Non-Canonical', 'dc-google-indexing' ),
-			'duplicate_content'    => __( 'Duplicate Content', 'dc-google-indexing' ),
-			'duplicate_short_desc' => __( 'Duplicate Short Desc', 'dc-google-indexing' ),
-			'thin_content'         => __( 'Thin Content (<150 words)', 'dc-google-indexing' ),
-			'title_mismatch'       => __( 'Title Mismatch', 'dc-google-indexing' ),
-			'duplicate_title'      => __( 'Duplicate Title', 'dc-google-indexing' ),
-		];
+			$qa_issue_labels = [
+				'fetch_error'          => __( 'Fetch Error', 'dc-google-indexing' ),
+				'not_found'            => __( '404 Not Found', 'dc-google-indexing' ),
+				'http_error'           => __( 'HTTP Error', 'dc-google-indexing' ),
+				'redirect'             => __( 'Redirect', 'dc-google-indexing' ),
+				'noindex'              => __( 'Noindex', 'dc-google-indexing' ),
+				'missing_title'        => __( 'Missing Title', 'dc-google-indexing' ),
+				'missing_meta_desc'    => __( 'Missing Meta Desc', 'dc-google-indexing' ),
+				'short_meta_desc'      => __( 'Short Meta Desc (≤80)', 'dc-google-indexing' ),
+				'missing_h1'           => __( 'Missing H1', 'dc-google-indexing' ),
+				'non_canonical'        => __( 'Non-Canonical', 'dc-google-indexing' ),
+				'duplicate_content'    => __( 'Duplicate Content', 'dc-google-indexing' ),
+				'duplicate_short_desc' => __( 'Duplicate Short Desc', 'dc-google-indexing' ),
+				'thin_content'         => __( 'Thin Content (<150 words)', 'dc-google-indexing' ),
+				'title_mismatch'       => __( 'Title Mismatch', 'dc-google-indexing' ),
+				'duplicate_title'      => __( 'Duplicate Title', 'dc-google-indexing' ),
+			];
 
-		$qa_issue_colors = [
-			'fetch_error'          => '#fd5d93',
-			'not_found'            => '#fd5d93',
-			'http_error'           => '#fd5d93',
-			'redirect'             => '#ff8d72',
-			'noindex'              => '#ff8d72',
-			'missing_title'        => '#ff8d72',
-			'missing_meta_desc'    => '#ff8d72',
-			'short_meta_desc'      => '#ff8d72',
-			'missing_h1'           => '#7a8499',
-			'non_canonical'        => '#ff8d72',
-			'duplicate_content'    => '#ff8d72',
-			'duplicate_short_desc' => '#ff8d72',
-			'thin_content'         => '#ff8d72',
-			'title_mismatch'       => '#ff8d72',
-			'duplicate_title'      => '#ff8d72',
-		];
-		?>
+			$qa_issue_colors = [
+				'fetch_error'          => '#fd5d93',
+				'not_found'            => '#fd5d93',
+				'http_error'           => '#fd5d93',
+				'redirect'             => '#ff8d72',
+				'noindex'              => '#ff8d72',
+				'missing_title'        => '#ff8d72',
+				'missing_meta_desc'    => '#ff8d72',
+				'short_meta_desc'      => '#ff8d72',
+				'missing_h1'           => '#7a8499',
+				'non_canonical'        => '#ff8d72',
+				'duplicate_content'    => '#ff8d72',
+				'duplicate_short_desc' => '#ff8d72',
+				'thin_content'         => '#ff8d72',
+				'title_mismatch'       => '#ff8d72',
+				'duplicate_title'      => '#ff8d72',
+			];
+			?>
 
-		<?php if ( ! empty( $qa_pending ) ) : ?>
+			<?php if ( ! empty( $qa_pending ) ) : ?>
 		<div class="dc-gi-callout warn" style="margin-bottom:20px">
-			<strong><?php
-			printf(
+			<strong>
+				<?php
+				printf(
 				/* translators: %d: number of URLs flagged by Watchlist */
-				esc_html__( '🔍 %d URL(s) flagged by Watchlist for manual QA scan', 'dc-google-indexing' ),
-				count( $qa_pending )
-			);
-			?></strong><br>
+					esc_html__( '🔍 %d URL(s) flagged by Watchlist for manual QA scan', 'dc-google-indexing' ),
+					count( $qa_pending )
+				);
+				?>
+			</strong><br>
 			<span style="font-size:12px;opacity:.8"><?php esc_html_e( 'These URLs were flagged by the Watchlist (Crawled/Discovered not indexed, or unknown to Google) and re-queued for submission. Run a scan to investigate on-page issues preventing indexing.', 'dc-google-indexing' ); ?></span>
 			<ul style="margin:8px 0 4px;padding-left:20px">
 				<?php foreach ( $qa_pending as $qa_pending_url ) : ?>
@@ -3238,7 +3549,7 @@ function dc_gi_render_page(): void {
 			</div>
 		</div>
 
-		<?php if ( ! empty( $qa_results ) || true ) : ?>
+			<?php if ( ! empty( $qa_results ) || true ) : ?>
 		<!-- Filter -->
 		<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
 			<label for="dc-gi-qa-filter" style="font-size:13px;color:#c8d0e0"><?php esc_html_e( 'Filter by issue:', 'dc-google-indexing' ); ?></label>
@@ -3269,11 +3580,12 @@ function dc_gi_render_page(): void {
 				</tr>
 			</thead>
 			<tbody id="dc-gi-qa-tbody">
-				<?php foreach ( array_reverse( $qa_results ) as $qa_entry ) :
-					$q_issues      = $qa_entry['issues'] ?? [];
-					$q_status      = (int) ( $qa_entry['http_status'] ?? 0 );
+				<?php
+				foreach ( array_reverse( $qa_results ) as $qa_entry ) :
+					$q_issues       = $qa_entry['issues'] ?? [];
+					$q_status       = (int) ( $qa_entry['http_status'] ?? 0 );
 					$q_status_color = 200 === $q_status ? '#00f2c3' : ( $q_status >= 400 ? '#fd5d93' : '#ff8d72' );
-				?>
+					?>
 				<tr data-qa-url="<?php echo esc_attr( $qa_entry['url'] ); ?>">
 					<td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="<?php echo esc_attr( $qa_entry['url'] ); ?>">
 						<a href="<?php echo esc_url( $qa_entry['url'] ); ?>" target="_blank" rel="noopener noreferrer">
@@ -3293,52 +3605,69 @@ function dc_gi_render_page(): void {
 								$issue_color = $qa_issue_colors[ $q_issue ] ?? '#7a8499';
 								$tooltip     = '';
 								if ( 'non_canonical' === $q_issue && ! empty( $qa_entry['canonical'] ) ) {
-									$tooltip = esc_attr( sprintf(
+									$tooltip = esc_attr(
+										sprintf(
 										/* translators: %s: canonical URL */
-										__( 'Canonical: %s', 'dc-google-indexing' ),
-										$qa_entry['canonical']
-									) );
+											__( 'Canonical: %s', 'dc-google-indexing' ),
+											$qa_entry['canonical']
+										)
+									);
 								} elseif ( 'duplicate_content' === $q_issue && ! empty( $qa_entry['duplicate_urls'] ) ) {
-									$tooltip = esc_attr( sprintf(
+									$tooltip = esc_attr(
+										sprintf(
 										/* translators: %s: comma-separated list of duplicate URLs */
-										__( 'Matches: %s', 'dc-google-indexing' ),
-										implode( ', ', (array) $qa_entry['duplicate_urls'] )
-									) );
+											__( 'Matches: %s', 'dc-google-indexing' ),
+											implode( ', ', (array) $qa_entry['duplicate_urls'] )
+										)
+									);
 								} elseif ( 'duplicate_short_desc' === $q_issue && ! empty( $qa_entry['duplicate_short_desc_urls'] ) ) {
-									$tooltip = esc_attr( sprintf(
+									$tooltip = esc_attr(
+										sprintf(
 										/* translators: %s: comma-separated list of URLs sharing the same short description */
-										__( 'Same short desc: %s', 'dc-google-indexing' ),
-										implode( ', ', (array) $qa_entry['duplicate_short_desc_urls'] )
-									) );
+											__( 'Same short desc: %s', 'dc-google-indexing' ),
+											implode( ', ', (array) $qa_entry['duplicate_short_desc_urls'] )
+										)
+									);
 								} elseif ( 'short_meta_desc' === $q_issue && ! empty( $qa_entry['meta_desc'] ) ) {
-									$tooltip = esc_attr( sprintf(
+									$tooltip = esc_attr(
+										sprintf(
 										/* translators: 1: character count, 2: meta description text */
-										__( '%1$d chars: "%2$s"', 'dc-google-indexing' ),
-										mb_strlen( html_entity_decode( $qa_entry['meta_desc'], ENT_QUOTES, 'UTF-8' ), 'UTF-8' ),
-										$qa_entry['meta_desc']
-									) );
+											__( '%1$d chars: "%2$s"', 'dc-google-indexing' ),
+											mb_strlen( html_entity_decode( $qa_entry['meta_desc'], ENT_QUOTES, 'UTF-8' ), 'UTF-8' ),
+											$qa_entry['meta_desc']
+										)
+									);
 								} elseif ( 'thin_content' === $q_issue && isset( $qa_entry['word_count'] ) ) {
-									$tooltip = esc_attr( sprintf(
+									$tooltip = esc_attr(
+										sprintf(
 										/* translators: %d: word count */
-										__( '%d words in body', 'dc-google-indexing' ),
-										(int) $qa_entry['word_count']
-									) );
+											__( '%d words in body', 'dc-google-indexing' ),
+											(int) $qa_entry['word_count']
+										)
+									);
 								} elseif ( 'title_mismatch' === $q_issue && isset( $qa_entry['word_count'] ) ) {
-									$tooltip = esc_attr( sprintf(
+									$tooltip = esc_attr(
+										sprintf(
 										/* translators: %d: word count */
-										__( 'Title words not found in body (%d words)', 'dc-google-indexing' ),
-										(int) $qa_entry['word_count']
-									) );
+											__( 'Title words not found in body (%d words)', 'dc-google-indexing' ),
+											(int) $qa_entry['word_count']
+										)
+									);
 								} elseif ( 'duplicate_title' === $q_issue && ! empty( $qa_entry['duplicate_title_urls'] ) ) {
-									$tooltip = esc_attr( sprintf(
+									$tooltip = esc_attr(
+										sprintf(
 										/* translators: %s: comma-separated list of URLs sharing the same SEO title */
-										__( 'Same title: %s', 'dc-google-indexing' ),
-										implode( ', ', (array) $qa_entry['duplicate_title_urls'] )
-									) );
+											__( 'Same title: %s', 'dc-google-indexing' ),
+											implode( ', ', (array) $qa_entry['duplicate_title_urls'] )
+										)
+									);
 								}
 								?>
 								<span style="display:inline-block;padding:1px 7px;border-radius:9px;font-size:11px;font-weight:600;background:rgba(255,255,255,.08);color:<?php echo esc_attr( $issue_color ); ?>;margin:1px 2px"
-									<?php if ( $tooltip ) : ?>title="<?php echo $tooltip; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- already esc_attr'd above ?>"<?php endif; ?>>
+									<?php
+									if ( $tooltip ) :
+										?>
+										title="<?php echo $tooltip; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- already esc_attr'd above ?>"<?php endif; ?>>
 									<?php echo esc_html( $issue_label ); ?>
 								</span>
 							<?php endforeach; ?>
@@ -3346,7 +3675,7 @@ function dc_gi_render_page(): void {
 					</td>
 					<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#7a8499"
 						title="<?php echo esc_attr( $qa_entry['title'] ?? '' ); ?>">
-						<?php echo esc_html( $qa_entry['title'] ?: '—' ); ?>
+						<?php echo esc_html( ( ! empty( $qa_entry['title'] ) ) ? $qa_entry['title'] : '—' ); ?>
 					</td>
 				</tr>
 				<?php endforeach; ?>
@@ -3432,32 +3761,32 @@ function dc_gi_render_page(): void {
 		<h2 style="margin-top:0"><?php esc_html_e( 'Index Status Overview', 'dc-google-indexing' ); ?></h2>
 		<p style="color:#8892a4;max-width:720px;font-size:13px;margin-bottom:20px"><?php esc_html_e( 'Live snapshot of all URLs in the inspection cache, grouped by coverage state and index verdict. The stat cards auto-refresh every 30 seconds.', 'dc-google-indexing' ); ?></p>
 
-		<?php
-		$is_counts   = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::get_verdict_counts()          : [];
-		$is_coverage = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::get_coverage_state_breakdown() : [];
-		$is_total    = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::count_total()                  : 0;
-		$is_pass     = (int) ( $is_counts['PASS']                ?? 0 );
-		$is_fail     = (int) ( $is_counts['FAIL']                ?? 0 );
-		$is_neutral  = (int) ( $is_counts['NEUTRAL']             ?? 0 );
-		$is_unspec   = (int) ( $is_counts['VERDICT_UNSPECIFIED'] ?? 0 );
-		$is_excl     = $is_neutral + $is_unspec;
-		$is_age      = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::oldest_entry_age_days() : null;
-		$is_ccolors  = [
-			'Submitted and indexed'                                 => '#00f2c3',
-			'Indexed, though not submitted in sitemap'              => '#00c9a7',
-			'URL is unknown to Google'                              => '#1d8cf8',
-			'Discovered - currently not indexed'                    => '#9b5fe0',
-			'Crawled - currently not indexed'                       => '#ff8d72',
-			'Page with redirect'                                    => '#ffa500',
-			'Blocked by robots.txt'                                 => '#fd5d93',
-			'Not found (404)'                                       => '#fd5d93',
-			'Soft 404'                                              => '#fd5d93',
-			'Duplicate without user-selected canonical'             => '#ff8d72',
-			'Canonical: other'                                      => '#ff8d72',
-			'Alternate page with proper canonical tag'              => '#7a8499',
-			'Duplicate, Google chose different canonical than user' => '#7a8499',
-		];
-		?>
+			<?php
+			$is_counts   = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::get_verdict_counts() : [];
+			$is_coverage = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::get_coverage_state_breakdown() : [];
+			$is_total    = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::count_total() : 0;
+			$is_pass     = (int) ( $is_counts['PASS'] ?? 0 );
+			$is_fail     = (int) ( $is_counts['FAIL'] ?? 0 );
+			$is_neutral  = (int) ( $is_counts['NEUTRAL'] ?? 0 );
+			$is_unspec   = (int) ( $is_counts['VERDICT_UNSPECIFIED'] ?? 0 );
+			$is_excl     = $is_neutral + $is_unspec;
+			$is_age      = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::oldest_entry_age_days() : null;
+			$is_ccolors  = [
+				'Submitted and indexed'                    => '#00f2c3',
+				'Indexed, though not submitted in sitemap' => '#00c9a7',
+				'URL is unknown to Google'                 => '#1d8cf8',
+				'Discovered - currently not indexed'       => '#9b5fe0',
+				'Crawled - currently not indexed'          => '#ff8d72',
+				'Page with redirect'                       => '#ffa500',
+				'Blocked by robots.txt'                    => '#fd5d93',
+				'Not found (404)'                          => '#fd5d93',
+				'Soft 404'                                 => '#fd5d93',
+				'Duplicate without user-selected canonical' => '#ff8d72',
+				'Canonical: other'                         => '#ff8d72',
+				'Alternate page with proper canonical tag' => '#7a8499',
+				'Duplicate, Google chose different canonical than user' => '#7a8499',
+			];
+			?>
 
 		<!-- Stat cards -->
 		<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:24px">
@@ -3483,19 +3812,20 @@ function dc_gi_render_page(): void {
 			</div>
 		</div>
 
-		<?php if ( $is_total > 0 ) : ?>
+			<?php if ( $is_total > 0 ) : ?>
 		<!-- Two-column: coverage bars + verdict donut -->
 		<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;max-width:940px;margin-bottom:28px">
 
 			<!-- LEFT: Coverage state bars -->
 			<div class="dc-gi-live-panel" style="padding:20px 22px">
 				<h3 style="margin:0 0 16px;font-size:14px;color:#c8d0e0"><?php esc_html_e( 'Coverage States', 'dc-google-indexing' ); ?></h3>
-				<?php foreach ( $is_coverage as $is_row ) :
+				<?php
+				foreach ( $is_coverage as $is_row ) :
 					$is_state = (string) $is_row['coverage_state'];
 					$is_cnt   = (int) $is_row['count'];
 					$is_pct   = $is_total > 0 ? (int) round( $is_cnt / $is_total * 100 ) : 0;
 					$is_col   = $is_ccolors[ $is_state ] ?? '#7a8499';
-				?>
+					?>
 				<div style="margin-bottom:12px">
 					<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
 						<span style="font-size:12px;color:#c8d0e0;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="<?php echo esc_attr( $is_state ); ?>"><?php echo esc_html( $is_state ); ?></span>
@@ -3512,22 +3842,34 @@ function dc_gi_render_page(): void {
 			<div class="dc-gi-live-panel" style="padding:20px 22px">
 				<h3 style="margin:0 0 16px;font-size:14px;color:#c8d0e0"><?php esc_html_e( 'Index Verdict', 'dc-google-indexing' ); ?></h3>
 				<?php
-				$is_segs = [
-					'PASS'                => [ 'label' => __( 'Pass',             'dc-google-indexing' ), 'color' => '#00f2c3' ],
-					'NEUTRAL'             => [ 'label' => __( 'Excluded/Neutral', 'dc-google-indexing' ), 'color' => '#ff8d72' ],
-					'FAIL'                => [ 'label' => __( 'Fail',             'dc-google-indexing' ), 'color' => '#fd5d93' ],
-					'VERDICT_UNSPECIFIED' => [ 'label' => __( 'Unspecified',      'dc-google-indexing' ), 'color' => '#6e7a90' ],
+				$is_segs    = [
+					'PASS'                => [
+						'label' => __( 'Pass', 'dc-google-indexing' ),
+						'color' => '#00f2c3',
+					],
+					'NEUTRAL'             => [
+						'label' => __( 'Excluded/Neutral', 'dc-google-indexing' ),
+						'color' => '#ff8d72',
+					],
+					'FAIL'                => [
+						'label' => __( 'Fail', 'dc-google-indexing' ),
+						'color' => '#fd5d93',
+					],
+					'VERDICT_UNSPECIFIED' => [
+						'label' => __( 'Unspecified', 'dc-google-indexing' ),
+						'color' => '#6e7a90',
+					],
 				];
 				$is_dtotal  = max( 1, (int) array_sum( $is_counts ) );
 				$is_r       = 70;
 				$is_sw      = 28;
 				$is_circ    = 2.0 * M_PI * $is_r;
-				$is_off_acc = $is_circ / 4.0; // start at 12 o'clock
+				$is_off_acc = $is_circ / 4.0; // Start at 12 o'clock.
 				$is_paths   = [];
 				foreach ( $is_segs as $is_v => $is_seg ) {
-					$is_vcnt    = (int) ( $is_counts[ $is_v ] ?? 0 );
-					$is_dash    = ( $is_vcnt / $is_dtotal ) * $is_circ;
-					$is_paths[] = [
+					$is_vcnt     = (int) ( $is_counts[ $is_v ] ?? 0 );
+					$is_dash     = ( $is_vcnt / $is_dtotal ) * $is_circ;
+					$is_paths[]  = [
 						'color'  => $is_seg['color'],
 						'label'  => $is_seg['label'],
 						'count'  => $is_vcnt,
@@ -3542,11 +3884,12 @@ function dc_gi_render_page(): void {
 					<svg width="200" height="200" viewBox="0 0 200 200" style="flex-shrink:0" aria-hidden="true">
 						<circle cx="100" cy="100" r="<?php echo esc_attr( (string) $is_r ); ?>"
 							fill="none" stroke="rgba(255,255,255,.06)" stroke-width="<?php echo esc_attr( (string) $is_sw ); ?>"/>
-						<?php foreach ( $is_paths as $is_path ) :
+						<?php
+						foreach ( $is_paths as $is_path ) :
 							if ( 0 === $is_path['count'] ) {
 								continue;
 							}
-						?>
+							?>
 						<circle cx="100" cy="100" r="<?php echo esc_attr( (string) $is_r ); ?>"
 							fill="none"
 							stroke="<?php echo esc_attr( $is_path['color'] ); ?>"
@@ -3583,12 +3926,13 @@ function dc_gi_render_page(): void {
 					</tr>
 				</thead>
 				<tbody>
-					<?php foreach ( $is_coverage as $is_row ) :
-						$is_state   = (string) $is_row['coverage_state'];
-						$is_cnt     = (int) $is_row['count'];
-						$is_pct_f   = $is_total > 0 ? round( $is_cnt / $is_total * 100, 1 ) : 0.0;
-						$is_col     = $is_ccolors[ $is_state ] ?? '#7a8499';
-					?>
+					<?php
+					foreach ( $is_coverage as $is_row ) :
+						$is_state = (string) $is_row['coverage_state'];
+						$is_cnt   = (int) $is_row['count'];
+						$is_pct_f = $is_total > 0 ? round( $is_cnt / $is_total * 100, 1 ) : 0.0;
+						$is_col   = $is_ccolors[ $is_state ] ?? '#7a8499';
+						?>
 					<tr>
 						<td style="color:#c8d0e0"><?php echo esc_html( $is_state ); ?></td>
 						<td style="color:#c8d0e0;font-weight:600" data-n="<?php echo esc_attr( (string) $is_cnt ); ?>"><?php echo esc_html( (string) $is_cnt ); ?></td>
@@ -3608,10 +3952,10 @@ function dc_gi_render_page(): void {
 
 		<?php endif; /* $is_total > 0 */ ?>
 
-		<?php if ( 0 === $is_total ) : ?>
+			<?php if ( 0 === $is_total ) : ?>
 		<div class="dc-gi-callout info" style="max-width:740px">
 			<strong><?php esc_html_e( 'Cache is empty', 'dc-google-indexing' ); ?></strong><br>
-			<?php esc_html_e( 'The inspection cache has no data yet. The background cron inspects URLs from the sitemap at a rate of 3 URLs per minute (no quota used). Check back in a few minutes.', 'dc-google-indexing' ); ?>
+				<?php esc_html_e( 'The inspection cache has no data yet. The background cron inspects URLs from the sitemap at a rate of 3 URLs per minute (no quota used). Check back in a few minutes.', 'dc-google-indexing' ); ?>
 		</div>
 		<?php endif; ?>
 

@@ -39,6 +39,7 @@ define( 'DC_GI_INSPECT_BATCH_SIZE', 3 );
  */
 define( 'DC_GI_CACHE_TTL', 7 * DAY_IN_SECONDS );
 
+/** URL inspection cache — mirrors Google's index-coverage state for sitemap URLs. */
 class DC_GI_URL_Cache {
 
 	/**
@@ -59,7 +60,7 @@ class DC_GI_URL_Cache {
 	 */
 	public static function create_table(): void {
 		global $wpdb;
-		$table      = self::table();
+		$table           = self::table();
 		$charset_collate = $wpdb->get_charset_collate();
 
 		$sql = "CREATE TABLE IF NOT EXISTS {$table} (
@@ -113,26 +114,32 @@ class DC_GI_URL_Cache {
 		if ( ! empty( $skip_urls ) ) {
 			$placeholders = implode( ',', array_fill( 0, count( $skip_urls ), '%s' ) );
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
-			$rows = $wpdb->get_col( $wpdb->prepare(
-				"SELECT url FROM `{$wpdb->prefix}dc_gi_url_cache`
+			$rows = $wpdb->get_col(
+				// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber
+				$wpdb->prepare(
+					"SELECT url FROM `{$wpdb->prefix}dc_gi_url_cache`
 				  WHERE index_verdict IN ('NEUTRAL','VERDICT_UNSPECIFIED')
 				    AND last_inspected >= %s
 				    AND url NOT IN ({$placeholders})
 				  ORDER BY last_inspected ASC
 				  LIMIT %d",
-				array_merge( [ $cutoff ], $skip_urls, [ $limit ] )
-			) );
+					array_merge( [ $cutoff ], $skip_urls, [ $limit ] )
+				)
+				// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber
+			);
 		} else {
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
-			$rows = $wpdb->get_col( $wpdb->prepare(
-				"SELECT url FROM `{$wpdb->prefix}dc_gi_url_cache`
+			$rows = $wpdb->get_col(
+				$wpdb->prepare(
+					"SELECT url FROM `{$wpdb->prefix}dc_gi_url_cache`
 				  WHERE index_verdict IN ('NEUTRAL','VERDICT_UNSPECIFIED')
 				    AND last_inspected >= %s
 				  ORDER BY last_inspected ASC
 				  LIMIT %d",
-				$cutoff,
-				$limit
-			) );
+					$cutoff,
+					$limit
+				)
+			);
 		}
 
 		return $rows ? (array) $rows : [];
@@ -186,16 +193,20 @@ class DC_GI_URL_Cache {
 	/**
 	 * Return the verdict + coverage for a single URL (or null if not cached).
 	 *
+	 * @param string $url Fully qualified URL to look up.
 	 * @return array{index_verdict:string,coverage_state:string}|null
 	 */
 	public static function get_entry( string $url ): ?array {
 		global $wpdb;
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
-		$row = $wpdb->get_row( $wpdb->prepare(
-			"SELECT index_verdict, coverage_state FROM `{$wpdb->prefix}dc_gi_url_cache` WHERE url = %s LIMIT 1",
-			$url
-		), ARRAY_A );
-		return $row ?: null;
+		$row = $wpdb->get_row(
+			$wpdb->prepare(
+				"SELECT index_verdict, coverage_state FROM `{$wpdb->prefix}dc_gi_url_cache` WHERE url = %s LIMIT 1",
+				$url
+			),
+			ARRAY_A
+		);
+		return ( null !== $row ) ? $row : null;
 	}
 
 	// =========================================================================
@@ -205,17 +216,18 @@ class DC_GI_URL_Cache {
 	/**
 	 * Upsert a single inspection result into the cache.
 	 *
-	 * @param string $url
-	 * @param string $index_verdict   e.g. 'PASS', 'FAIL', 'NEUTRAL', 'VERDICT_UNSPECIFIED'
-	 * @param string $coverage_state  e.g. 'Submitted and indexed'
-	 * @param string $page_fetch_state
+	 * @param string $url              Fully qualified URL.
+	 * @param string $index_verdict    e.g. 'PASS', 'FAIL', 'NEUTRAL', 'VERDICT_UNSPECIFIED'.
+	 * @param string $coverage_state   e.g. 'Submitted and indexed'.
+	 * @param string $page_fetch_state Google page fetch state string.
 	 */
 	public static function upsert( string $url, string $index_verdict, string $coverage_state, string $page_fetch_state = '' ): void {
 		global $wpdb;
 		$now = gmdate( 'Y-m-d H:i:s' );
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
-		$wpdb->query( $wpdb->prepare(
-			"INSERT INTO `{$wpdb->prefix}dc_gi_url_cache`
+		$wpdb->query(
+			$wpdb->prepare(
+				"INSERT INTO `{$wpdb->prefix}dc_gi_url_cache`
 				(url, index_verdict, coverage_state, page_fetch_state, last_inspected)
 			 VALUES (%s, %s, %s, %s, %s)
 			 ON DUPLICATE KEY UPDATE
@@ -223,17 +235,20 @@ class DC_GI_URL_Cache {
 				coverage_state   = VALUES(coverage_state),
 				page_fetch_state = VALUES(page_fetch_state),
 				last_inspected   = VALUES(last_inspected)",
-			$url,
-			$index_verdict,
-			$coverage_state,
-			$page_fetch_state,
-			$now
-		) );
+				$url,
+				$index_verdict,
+				$coverage_state,
+				$page_fetch_state,
+				$now
+			)
+		);
 	}
 
 	/**
 	 * Stamp a URL as submitted at the current time (updates last_submitted only).
 	 * Called by the poll loop after enqueuing a URL for submission.
+	 *
+	 * @param string $url Fully qualified URL.
 	 */
 	public static function mark_submitted( string $url ): void {
 		global $wpdb;
@@ -249,6 +264,8 @@ class DC_GI_URL_Cache {
 
 	/**
 	 * Remove a single URL from the cache (e.g. when it no longer exists in sitemap).
+	 *
+	 * @param string $url Fully qualified URL to remove.
 	 */
 	public static function delete_url( string $url ): void {
 		global $wpdb;
@@ -266,7 +283,7 @@ class DC_GI_URL_Cache {
 	 * freshest entries are refreshed last.
 	 *
 	 * @param string[] $all_sitemap_urls Full sitemap URL list.
-	 * @param int      $limit
+	 * @param int      $limit            Maximum number of URLs to return.
 	 * @return string[]
 	 */
 	public static function get_urls_needing_inspection( array $all_sitemap_urls, int $limit ): array {
@@ -281,14 +298,18 @@ class DC_GI_URL_Cache {
 		// Fetch already-fresh URLs in one query so we can subtract them locally.
 		$placeholders = implode( ',', array_fill( 0, count( $all_sitemap_urls ), '%s' ) );
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
-		$fresh_urls = $wpdb->get_col( $wpdb->prepare(
-			"SELECT url FROM `{$wpdb->prefix}dc_gi_url_cache`
+		$fresh_urls = $wpdb->get_col(
+			// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber
+			$wpdb->prepare(
+				"SELECT url FROM `{$wpdb->prefix}dc_gi_url_cache`
 			  WHERE url IN ({$placeholders})
 			    AND last_inspected >= %s",
-			array_merge( $all_sitemap_urls, [ $cutoff ] )
-		) );
+				array_merge( $all_sitemap_urls, [ $cutoff ] )
+			)
+			// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber
+		);
 
-		$fresh_set = array_flip( $fresh_urls ?: [] );
+		$fresh_set = array_flip( $fresh_urls ?? [] );
 
 		// URLs not in cache, or stale, in original sitemap order.
 		$needing = [];
@@ -321,7 +342,7 @@ class DC_GI_URL_Cache {
 		$fetch_state    = $isr['pageFetchState'] ?? '';
 
 		// Map raw API verdict to our normalised set.
-		$verdict_map = [
+		$verdict_map   = [
 			'PASS'                => 'PASS',
 			'FAIL'                => 'FAIL',
 			'NEUTRAL'             => 'NEUTRAL',
@@ -406,9 +427,9 @@ class DC_GI_URL_Cache {
 	 */
 	public static function get_verdict_counts(): array {
 		global $wpdb;
-		$table = self::table_name();
+		$table = self::table();
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-		$rows = $wpdb->get_results( "SELECT index_verdict, COUNT(*) AS cnt FROM {$table} GROUP BY index_verdict", ARRAY_A );
+		$rows   = $wpdb->get_results( "SELECT index_verdict, COUNT(*) AS cnt FROM {$table} GROUP BY index_verdict", ARRAY_A );
 		$counts = [];
 		foreach ( (array) $rows as $row ) {
 			$counts[ (string) $row['index_verdict'] ] = (int) $row['cnt'];
@@ -423,9 +444,9 @@ class DC_GI_URL_Cache {
 	 */
 	public static function get_coverage_state_breakdown(): array {
 		global $wpdb;
-		$table = self::table_name();
+		$table = self::table();
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-		$rows = $wpdb->get_results( "SELECT coverage_state, COUNT(*) AS cnt FROM {$table} GROUP BY coverage_state ORDER BY cnt DESC", ARRAY_A );
+		$rows   = $wpdb->get_results( "SELECT coverage_state, COUNT(*) AS cnt FROM {$table} GROUP BY coverage_state ORDER BY cnt DESC", ARRAY_A );
 		$result = [];
 		foreach ( (array) $rows as $row ) {
 			$result[] = [
