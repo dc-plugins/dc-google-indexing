@@ -12,12 +12,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+/** XML sitemap discovery and URL extraction helper. */
 class DC_GI_Sitemap {
 
 	/**
 	 * Return a flat array of URLs from the site's XML sitemap(s).
 	 *
-	 * @param  int             $limit  Maximum number of URLs to return.
+	 * @param  int $limit  Maximum number of URLs to return.
 	 * @return array|WP_Error          URL strings or WP_Error.
 	 */
 	public static function get_urls( int $limit = 500 ) {
@@ -55,7 +56,10 @@ class DC_GI_Sitemap {
 		// 1. Parse Sitemap: directives from robots.txt
 		$robots_response = wp_remote_get(
 			get_home_url( null, '/robots.txt' ),
-			[ 'timeout' => 8, 'redirection' => 3 ]
+			[
+				'timeout'     => 8,
+				'redirection' => 3,
+			]
 		);
 		if ( ! is_wp_error( $robots_response )
 			&& 200 === (int) wp_remote_retrieve_response_code( $robots_response ) ) {
@@ -71,18 +75,24 @@ class DC_GI_Sitemap {
 
 		// 2. Common sitemap locations (fallback when robots.txt has none)
 		$candidates = [
-			get_home_url( null, '/wp-sitemap.xml' ),      // WordPress 5.5+ built-in
-			get_home_url( null, '/sitemap_index.xml' ),   // Yoast SEO
-			get_home_url( null, '/sitemap.xml' ),         // Generic / RankMath
-			get_home_url( null, '/sitemap-index.xml' ),   // AIOSEO
+			get_home_url( null, '/wp-sitemap.xml' ),      // WordPress 5.5+ built-in.
+			get_home_url( null, '/sitemap_index.xml' ),   // Yoast SEO.
+			get_home_url( null, '/sitemap.xml' ),         // Generic / RankMath.
+			get_home_url( null, '/sitemap-index.xml' ),   // AIOSEO.
 		];
 
 		foreach ( $candidates as $candidate ) {
-			$head = wp_remote_head( $candidate, [ 'timeout' => 5, 'redirection' => 3 ] );
+			$head = wp_remote_head(
+				$candidate,
+				[
+					'timeout'     => 5,
+					'redirection' => 3,
+				]
+			);
 			if ( ! is_wp_error( $head )
 				&& 200 === (int) wp_remote_retrieve_response_code( $head ) ) {
 				$found[] = $candidate;
-				break; // Use only the first valid candidate
+				break; // Use only the first valid candidate.
 			}
 		}
 
@@ -102,8 +112,8 @@ class DC_GI_Sitemap {
 	 * Fetch and parse a single sitemap (index or regular).
 	 * Recursively handles sitemap index files.
 	 *
-	 * @param  string          $url    Sitemap URL.
-	 * @param  int             $limit  Max URLs to collect.
+	 * @param  string $url    Sitemap URL.
+	 * @param  int    $limit  Max URLs to collect.
 	 * @return array|WP_Error          URL strings or WP_Error.
 	 */
 	private static function parse_sitemap( string $url, int $limit ) {
@@ -111,7 +121,13 @@ class DC_GI_Sitemap {
 			return [];
 		}
 
-		$response = wp_remote_get( $url, [ 'timeout' => 15, 'redirection' => 3 ] );
+		$response = wp_remote_get(
+			$url,
+			[
+				'timeout'     => 15,
+				'redirection' => 3,
+			]
+		);
 		if ( is_wp_error( $response ) ) {
 			return $response;
 		}

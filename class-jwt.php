@@ -12,37 +12,52 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+/** Google OAuth2 JWT builder and Indexing/Inspection API client. */
 class DC_GI_JWT {
 
 	// -------------------------------------------------------------------------
 	// JWT helpers
 	// -------------------------------------------------------------------------
 
+	/**
+	 * Encode data as a URL-safe Base64 string (no padding).
+	 *
+	 * @param string $data Raw binary data.
+	 * @return string URL-safe Base64-encoded string.
+	 */
 	private static function base64url_encode( string $data ): string {
+		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode
 		return rtrim( strtr( base64_encode( $data ), '+/', '-_' ), '=' );
 	}
 
 	/**
 	 * Build and sign an RS256 JWT for Google OAuth2.
 	 *
-	 * @param  array           $sa     Decoded service account JSON.
-	 * @param  string          $scope  OAuth2 scope (space-separated for multiple).
+	 * @param  array  $sa     Decoded service account JSON.
+	 * @param  string $scope  OAuth2 scope (space-separated for multiple).
 	 * @return string|WP_Error         Signed JWT or WP_Error.
 	 */
 	private static function build_jwt( array $sa, string $scope = 'https://www.googleapis.com/auth/indexing' ) {
 		$now = time();
 
 		$header  = self::base64url_encode(
-			(string) wp_json_encode( [ 'alg' => 'RS256', 'typ' => 'JWT' ] )
+			(string) wp_json_encode(
+				[
+					'alg' => 'RS256',
+					'typ' => 'JWT',
+				]
+			)
 		);
 		$payload = self::base64url_encode(
-			(string) wp_json_encode( [
-				'iss'   => $sa['client_email'],
-				'scope' => $scope,
-				'aud'   => 'https://oauth2.googleapis.com/token',
-				'iat'   => $now,
-				'exp'   => $now + 3600,
-			] )
+			(string) wp_json_encode(
+				[
+					'iss'   => $sa['client_email'],
+					'scope' => $scope,
+					'aud'   => 'https://oauth2.googleapis.com/token',
+					'iat'   => $now,
+					'exp'   => $now + 3600,
+				]
+			)
 		);
 
 		$signing_input = $header . '.' . $payload;
@@ -68,9 +83,9 @@ class DC_GI_JWT {
 	/**
 	 * Exchange a signed JWT for a Google OAuth2 access token and cache it.
 	 *
-	 * @param  array           $sa            Decoded service account JSON.
-	 * @param  string          $scope         OAuth2 scope string.
-	 * @param  string          $transient_key WP transient key for caching.
+	 * @param  array  $sa            Decoded service account JSON.
+	 * @param  string $scope         OAuth2 scope string.
+	 * @param  string $transient_key WP transient key for caching.
 	 * @return string|WP_Error                Bearer token or WP_Error.
 	 */
 	private static function get_token_for_scope( array $sa, string $scope, string $transient_key ) {
@@ -117,7 +132,7 @@ class DC_GI_JWT {
 	/**
 	 * Obtain (or return cached) access token for the Indexing API.
 	 *
-	 * @param  array           $sa  Decoded service account JSON.
+	 * @param  array $sa  Decoded service account JSON.
 	 * @return string|WP_Error      Bearer token or WP_Error.
 	 */
 	public static function get_access_token( array $sa ) {
@@ -131,7 +146,7 @@ class DC_GI_JWT {
 	/**
 	 * Obtain (or return cached) access token for the URL Inspection API.
 	 *
-	 * @param  array           $sa  Decoded service account JSON.
+	 * @param  array $sa  Decoded service account JSON.
 	 * @return string|WP_Error      Bearer token or WP_Error.
 	 */
 	public static function get_inspection_token( array $sa ) {
@@ -149,9 +164,9 @@ class DC_GI_JWT {
 	/**
 	 * Submit a single URL to the Google Web Search Indexing API.
 	 *
-	 * @param  array           $sa    Decoded service account JSON.
-	 * @param  string          $url   Fully qualified URL.
-	 * @param  string          $type  'URL_UPDATED' or 'URL_DELETED'.
+	 * @param  array  $sa    Decoded service account JSON.
+	 * @param  string $url   Fully qualified URL.
+	 * @param  string $type  'URL_UPDATED' or 'URL_DELETED'.
 	 * @return array|WP_Error         API response body or WP_Error.
 	 */
 	public static function submit_url( array $sa, string $url, string $type = 'URL_UPDATED' ) {
@@ -167,10 +182,12 @@ class DC_GI_JWT {
 					'Authorization' => 'Bearer ' . $token,
 					'Content-Type'  => 'application/json',
 				],
-				'body'    => (string) wp_json_encode( [
-					'url'  => $url,
-					'type' => $type,
-				] ),
+				'body'    => (string) wp_json_encode(
+					[
+						'url'  => $url,
+						'type' => $type,
+					]
+				),
 				'timeout' => 15,
 			]
 		);
@@ -207,9 +224,9 @@ class DC_GI_JWT {
 	/**
 	 * Inspect a URL via the Google Search Console URL Inspection API.
 	 *
-	 * @param  array           $sa        Decoded service account JSON.
-	 * @param  string          $url       Fully qualified URL to inspect.
-	 * @param  string          $site_url  Search Console property URL (e.g. https://example.com/).
+	 * @param  array  $sa        Decoded service account JSON.
+	 * @param  string $url       Fully qualified URL to inspect.
+	 * @param  string $site_url  Search Console property URL (e.g. https://example.com/).
 	 * @return array|WP_Error             API response body or WP_Error.
 	 */
 	public static function inspect_url( array $sa, string $url, string $site_url ) {
@@ -225,10 +242,12 @@ class DC_GI_JWT {
 					'Authorization' => 'Bearer ' . $token,
 					'Content-Type'  => 'application/json',
 				],
-				'body'    => (string) wp_json_encode( [
-					'inspectionUrl' => $url,
-					'siteUrl'       => $site_url,
-				] ),
+				'body'    => (string) wp_json_encode(
+					[
+						'inspectionUrl' => $url,
+						'siteUrl'       => $site_url,
+					]
+				),
 				'timeout' => 15,
 			]
 		);
@@ -293,13 +312,18 @@ class DC_GI_JWT {
 		$parts    = [];
 
 		foreach ( $items as $i => $item ) {
-			$json  = (string) wp_json_encode( [ 'url' => $item['url'], 'type' => $item['type'] ] );
-			$part  = "Content-Type: application/http\r\n";
-			$part .= "Content-ID: <item{$i}>\r\n\r\n";
-			$part .= "POST /v3/urlNotifications:publish HTTP/1.1\r\n";
-			$part .= "Content-Type: application/json\r\n";
-			$part .= 'Content-Length: ' . strlen( $json ) . "\r\n\r\n";
-			$part .= $json;
+			$json    = (string) wp_json_encode(
+				[
+					'url'  => $item['url'],
+					'type' => $item['type'],
+				]
+			);
+			$part    = "Content-Type: application/http\r\n";
+			$part   .= "Content-ID: <item{$i}>\r\n\r\n";
+			$part   .= "POST /v3/urlNotifications:publish HTTP/1.1\r\n";
+			$part   .= "Content-Type: application/json\r\n";
+			$part   .= 'Content-Length: ' . strlen( $json ) . "\r\n\r\n";
+			$part   .= $json;
 			$parts[] = $part;
 		}
 
@@ -336,7 +360,7 @@ class DC_GI_JWT {
 
 		if ( $outer_code >= 400 ) {
 			$body_arr = json_decode( $outer_body, true );
-			$msg = is_array( $body_arr ) ? ( $body_arr['error']['message'] ?? '' ) : '';
+			$msg      = is_array( $body_arr ) ? ( $body_arr['error']['message'] ?? '' ) : '';
 			if ( ! $msg ) {
 				$msg = sprintf(
 					/* translators: %d: HTTP response code from Google batch API */
@@ -395,7 +419,7 @@ class DC_GI_JWT {
 			if ( false === $dblnl ) {
 				$dblnl = strpos( $raw_part, "\n\n" );
 				if ( false === $dblnl ) {
-					$part_idx++;
+					++$part_idx;
 					continue;
 				}
 				$outer_hdr  = substr( $raw_part, 0, $dblnl );
@@ -417,7 +441,7 @@ class DC_GI_JWT {
 			} elseif ( preg_match( '/Content-ID:\s*response-item(\d+)/i', $outer_hdr, $cm ) ) {
 				$idx = (int) $cm[1];
 			}
-			$part_idx++;
+			++$part_idx;
 
 			$url = $indexed_urls[ $idx ] ?? null;
 			if ( null === $url ) {
@@ -475,7 +499,7 @@ class DC_GI_JWT {
 	 * Validate credentials by obtaining a fresh access token.
 	 * Does not submit any URL.
 	 *
-	 * @param  array           $sa  Decoded service account JSON.
+	 * @param  array $sa  Decoded service account JSON.
 	 * @return true|WP_Error        True on success, WP_Error on failure.
 	 */
 	public static function test_connection( array $sa ) {
