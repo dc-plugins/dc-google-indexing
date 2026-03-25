@@ -1491,7 +1491,7 @@ function dc_gi_ajax_poll_wait(): void {
 	wp_send_json_success(
 		[
 			'active'          => $is_active,
-			'last_poll'       => ( ! empty( $last_poll ) ) ? $last_poll : null,
+			'last_poll'       => $last_poll ? $last_poll : null,
 			'cycle_seen'      => $cycle_seen_w,
 			'cycle_total'     => $cycle_total_w,
 			'queue_count'     => count( $queue ),
@@ -1522,7 +1522,7 @@ function dc_gi_poll_status_data(): array {
 	$cycle_total = $last_poll ? ( $last_poll['cycle_total'] ?? 0 ) : $cycle_seen;
 	return [
 		'active'          => $active,
-		'last_poll'       => ( ! empty( $last_poll ) ) ? $last_poll : null,
+		'last_poll'       => $last_poll ? $last_poll : null,
 		'cycle_seen'      => $cycle_seen,
 		'cycle_total'     => $cycle_total,
 		'queue_count'     => count( (array) get_option( 'dc_gi_queue', [] ) ),
@@ -2064,10 +2064,10 @@ function dc_gi_render_page(): void {
 		'queue_cleared'         => [ 'success', __( 'Queue cleared.', 'dc-google-indexing' ) ],
 		'log_cleared'           => [ 'success', __( 'Log cleared.', 'dc-google-indexing' ) ],
 		'test_ok'               => [ 'success', __( '&#10003; Connection successful — credentials are valid.', 'dc-google-indexing' ) ],
-		'test_fail'             => [ 'error', ( ! empty( esc_html( $errmsg ) ) ) ? esc_html( $errmsg ) : __( 'Connection failed.', 'dc-google-indexing' ) ],
+		'test_fail'             => [ 'error', $errmsg ? esc_html( $errmsg ) : __( 'Connection failed.', 'dc-google-indexing' ) ],
 		'test_no_sa'            => [ 'error', __( 'No service account saved. Paste your JSON and save first.', 'dc-google-indexing' ) ],
-		'poll_no_sitemap'       => [ 'error', ( ! empty( esc_html( $errmsg ) ) ) ? esc_html( $errmsg ) : __( 'No sitemap found. Ensure your site has a public XML sitemap.', 'dc-google-indexing' ) ],
-		'poll_error'            => [ 'error', ( ! empty( esc_html( $errmsg ) ) ) ? esc_html( $errmsg ) : __( 'Polling failed.', 'dc-google-indexing' ) ],
+		'poll_no_sitemap'       => [ 'error', $errmsg ? esc_html( $errmsg ) : __( 'No sitemap found. Ensure your site has a public XML sitemap.', 'dc-google-indexing' ) ],
+		'poll_error'            => [ 'error', $errmsg ? esc_html( $errmsg ) : __( 'Polling failed.', 'dc-google-indexing' ) ],
 		'watch_cleared'         => [ 'success', __( 'Watchlist cleared.', 'dc-google-indexing' ) ],
 		'watch_indexed_cleared' => [
 			'success',

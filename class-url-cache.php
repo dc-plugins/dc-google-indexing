@@ -206,7 +206,7 @@ class DC_GI_URL_Cache {
 			),
 			ARRAY_A
 		);
-		return ( null !== $row ) ? $row : null;
+		return $row;
 	}
 
 	// =========================================================================
