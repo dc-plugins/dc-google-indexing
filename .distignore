@@ -3,3 +3,7 @@
 .gitattributes
 .gitignore
 .distignore
+README.md
+phpcs.xml
+composer.json
+composer.lock
