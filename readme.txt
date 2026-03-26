@@ -1,10 +1,10 @@
 === DC Google Indexing ===
-Contributors: dampcig
+Contributors: lennilg
 Tags: google, indexing, seo, search console, instant indexing
 Requires at least: 6.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.0.0
+Stable tag: 1.1.0
 License: GPL-2.0+
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -29,6 +29,8 @@ The plugin uses a Google Cloud Service Account and OAuth2 to authenticate reques
 * 🧪 Test connection — validates credentials without sending any URL
 * 🔑 No external libraries — pure PHP JWT/OAuth2 implementation
 * ✅ Getting Started guide with step-by-step setup instructions
+* 🗂️ Index Status dashboard — background URL inspection with verdict & coverage breakdown
+* ⚡ Cache-based polling — zero Inspection API quota consumed during queue polling
 * 🌍 Translation ready
 
 **Requirements**
@@ -79,13 +81,25 @@ The service account JSON is stored in your WordPress database (wp_options). It i
 3. Submit URLs — paste a list of URLs for instant submission
 4. Queue — view and process pending URLs
 5. Log — submission history with status per URL
+6. Index Status — verdict distribution donut chart and colour-coded coverage-state breakdown
 
 == Changelog ==
 
+= 1.1.0 =
+* New: Index Status dashboard tab with verdict distribution (donut chart) and colour-coded coverage-state breakdown.
+* New: Background URL inspection cron — inspects 3 URLs/min via the URL Inspection API and stores results in a dedicated DB table.
+* New: Cache-based polling — queue polling now reads verdicts from the local cache instead of calling the Inspection API directly, consuming zero quota per poll run.
+* New: Clear Cache button and cache stats panel in the Polling tab.
+* Improvement: Complete docblocks added to all functions across all plugin files.
+* Fix: Various PHPCS/WordPress Coding Standards issues resolved throughout the codebase.
+
 = 1.0.0 =
-* Initial release
+* Initial release.
 
 == Upgrade Notice ==
+
+= 1.1.0 =
+Adds a new Index Status tab with background URL inspection and a cache-based polling system. A new database table (`{prefix}dc_gi_url_cache`) is created automatically on upgrade.
 
 = 1.0.0 =
 Initial release.
