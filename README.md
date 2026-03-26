@@ -74,14 +74,6 @@ vendor/bin/phpcs
 
 There is no test suite. PHPCS is the only validation step — run it before opening a pull request.
 
-## Deployment
-
-Pushes to `main` and `v*` tags trigger the [deploy workflow](.github/workflows/deploy.yml), which:
-
-1. rsync-deploys to production via SSH.
-2. Builds a `dist/dc-google-indexing.zip` artifact.
-3. Creates a GitHub Release with the ZIP on `v*` tags.
-
 ## Changelog
 
 ### 1.1.0
