@@ -816,16 +816,14 @@ function dc_gi_is_quota_exhausted(): bool {
 
 // =============================================================================
 // FOOTER CREDIT
-// Replaces the first © inside <footer>…</footer> with a linked ©
-// pointing to dampcig.dk.
+// Injects a tiny inline script via wp_footer that uses a DOM TreeWalker to find
+// the first © text node inside <footer> and wraps it with a link to dampcig.dk.
 //
 // Only registered when the checkbox is enabled. Defines the sentinel function
 // dc_footer_credit_owner() on registration — if another plugin already defined
 // it (its checkbox was also ticked and it loaded first), this block is silently
 // skipped so only one plugin ever owns the footer credit.
 // =============================================================================
-
-define( 'DC_GI_FOOTER_TRANSIENT', 'dc_gi_footer_strategy' ); // phpcs:ignore Squiz.PHP.CommentedOutCode.Found -- valid values: 'copyright' | 'none'
 
 $dc_gi_settings = dc_gi_get_settings();
 if ( ! empty( $dc_gi_settings['footer_credit'] ) && ! function_exists( 'dc_footer_credit_owner' ) ) {
@@ -836,82 +834,45 @@ if ( ! empty( $dc_gi_settings['footer_credit'] ) && ! function_exists( 'dc_foote
 	 */
 	function dc_footer_credit_owner(): void {}
 
-	add_action( 'template_redirect', 'dc_gi_footer_credit_start' );
+	add_action( 'wp_footer', 'dc_gi_footer_credit_js', PHP_INT_MAX );
 }
 unset( $dc_gi_settings );
 
 /**
- * Start output buffering to allow footer copyright replacement on the front end.
+ * Output a tiny inline TreeWalker script that wraps the first © text node
+ * inside <footer> with a link to dampcig.dk.
  */
-function dc_gi_footer_credit_start(): void {
+function dc_gi_footer_credit_js(): void {
 	if ( is_admin() ) {
 		return;
 	}
-	ob_start( 'dc_gi_footer_credit_process' );
+	$url   = 'https://www.dampcig.dk';
+	$title = esc_js( 'Powered by Dampcig.dk' );
+	?>
+<script>(function(){
+var f=document.querySelector('footer');
+if(!f)return;
+var w=document.createTreeWalker(f,NodeFilter.SHOW_TEXT,null,false);
+var node;
+while((node=w.nextNode())){
+	if(node.nodeValue.indexOf('\u00A9')===-1)continue;
+	var idx=node.nodeValue.indexOf('\u00A9');
+	var frag=document.createDocumentFragment();
+	if(idx>0)frag.appendChild(document.createTextNode(node.nodeValue.slice(0,idx)));
+	var a=document.createElement('a');
+	a.href=<?php echo wp_json_encode( $url ); ?>;
+	a.title=<?php echo wp_json_encode( $title ); ?>;
+	a.target='_blank';
+	a.rel='noopener noreferrer';
+	a.textContent='\u00A9';
+	frag.appendChild(a);
+	var rest=node.nodeValue.slice(idx+1);
+	if(rest)frag.appendChild(document.createTextNode(rest));
+	node.parentNode.replaceChild(frag,node);
+	break;
 }
-
-/**
- * Output buffer callback: replace the first copyright symbol inside the footer element.
- *
- * @param string $html Full page HTML captured by ob_start().
- * @return string Modified HTML.
- */
-function dc_gi_footer_credit_process( string $html ): string {
-	$link  = '<a href="https://www.dampcig.dk" title="Powered by Dampcig.dk" target="_blank" rel="noopener noreferrer">&copy;</a>';
-	$group = 'dc_gi';
-	$key   = DC_GI_FOOTER_TRANSIENT;
-
-	$strategy = wp_cache_get( $key, $group );
-	if ( false === $strategy ) {
-		$strategy = get_transient( $key );
-	}
-
-	if ( 'copyright' === $strategy ) {
-		return dc_gi_do_copyright_replace( $html, $link );
-	}
-	if ( 'none' === $strategy ) {
-		return $html;
-	}
-
-	$replaced = dc_gi_do_copyright_replace( $html, $link );
-	if ( $replaced !== $html ) {
-		wp_cache_set( $key, 'copyright', $group, WEEK_IN_SECONDS );
-		set_transient( $key, 'copyright', WEEK_IN_SECONDS );
-		return $replaced;
-	}
-
-	wp_cache_set( $key, 'none', $group, WEEK_IN_SECONDS );
-	set_transient( $key, 'none', WEEK_IN_SECONDS );
-	return $html;
-}
-
-/**
- * Replace the first copyright symbol inside the HTML footer element with a credit link.
- *
- * @param string $html Full page HTML.
- * @param string $link Replacement anchor element.
- * @return string Modified HTML.
- */
-function dc_gi_do_copyright_replace( string $html, string $link ): string {
-	if ( ! preg_match( '/(<footer[\s\S]*?<\/footer>)/i', $html, $m, PREG_OFFSET_CAPTURE ) ) {
-		return $html;
-	}
-	$footer_html = $m[0][0];
-	$offset      = $m[0][1];
-	$new_footer  = preg_replace( '/©|&copy;|&#169;|&#xA9;/u', $link, $footer_html, 1, $count );
-	if ( ! $count ) {
-		return $html;
-	}
-	return substr_replace( $html, $new_footer, $offset, strlen( $footer_html ) );
-}
-
-add_action( 'switch_theme', 'dc_gi_clear_footer_cache' );
-/**
- * Clear the cached footer strategy when the active theme changes.
- */
-function dc_gi_clear_footer_cache(): void {
-	wp_cache_delete( DC_GI_FOOTER_TRANSIENT, 'dc_gi' );
-	delete_transient( DC_GI_FOOTER_TRANSIENT );
+})();</script>
+	<?php
 }
 
 // =============================================================================
