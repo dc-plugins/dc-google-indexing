@@ -40,15 +40,6 @@ vendor/bin/phpcs
 
 PHPCS is configured by `phpcs.xml`. It checks all `.php` files except `vendor/` and `node_modules/`. **Always run `composer install` before `vendor/bin/phpcs`.**
 
-## CI / Deployment
-
-The single workflow `.github/workflows/deploy.yml` triggers on `push` to `main` or tags matching `v*`. It:
-1. rsync-deploys to a production server via SSH (uses `secrets.SSH_PRIVATE_KEY`, `vars.SSH_USER`, `vars.SSH_HOST`, `vars.DEPLOY_PATH`).
-2. Builds a `dist/dc-google-indexing.zip` artifact (excluding `.git`, `.github`, `phpcs.xml`).
-3. Creates a GitHub Release with the ZIP when a `v*` tag is pushed.
-
-There is no lint step in CI — run `vendor/bin/phpcs` locally before merging.
-
 ## Coding Conventions
 
 Follow **WordPress Coding Standards** (PHPCS enforces this). Key rules:
