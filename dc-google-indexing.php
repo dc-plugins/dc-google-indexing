@@ -817,27 +817,34 @@ function dc_gi_is_quota_exhausted(): bool {
 // =============================================================================
 // FOOTER CREDIT
 // Replaces the first © inside <footer>…</footer> with a linked ©
-// pointing to dampcig.dk. Defers to dc-sw-prefetch if that plugin is active
-// and has its own footer-credit enabled — one link per page.
+// pointing to dampcig.dk.
+//
+// Only registered when the checkbox is enabled. Defines the sentinel function
+// dc_footer_credit_owner() on registration — if another plugin already defined
+// it (its checkbox was also ticked and it loaded first), this block is silently
+// skipped so only one plugin ever owns the footer credit.
 // =============================================================================
 
 define( 'DC_GI_FOOTER_TRANSIENT', 'dc_gi_footer_strategy' ); // phpcs:ignore Squiz.PHP.CommentedOutCode.Found -- valid values: 'copyright' | 'none'
 
-add_action( 'template_redirect', 'dc_gi_footer_credit_start' );
+$dc_gi_settings = dc_gi_get_settings();
+if ( ! empty( $dc_gi_settings['footer_credit'] ) && ! function_exists( 'dc_footer_credit_owner' ) ) {
+	/**
+	 * Sentinel: marks this plugin as the active footer-credit owner.
+	 * Other DC plugins check function_exists( 'dc_footer_credit_owner' ) and skip
+	 * their own registration when this is already defined.
+	 */
+	function dc_footer_credit_owner(): void {}
+
+	add_action( 'template_redirect', 'dc_gi_footer_credit_start' );
+}
+unset( $dc_gi_settings );
+
 /**
  * Start output buffering to allow footer copyright replacement on the front end.
  */
 function dc_gi_footer_credit_start(): void {
 	if ( is_admin() ) {
-		return;
-	}
-	$settings = dc_gi_get_settings();
-	if ( empty( $settings['footer_credit'] ) ) {
-		return;
-	}
-	// dc-sw-prefetch owns the credit when both plugins are active — avoid duplicates.
-	if ( function_exists( 'dc_swp_footer_credit_start' )
-		&& get_option( 'dampcig_pwa_footer_credit', 'no' ) === 'yes' ) {
 		return;
 	}
 	ob_start( 'dc_gi_footer_credit_process' );
