@@ -449,12 +449,19 @@ function dc_gi_poll_js(): string {
 			console.log('[dcGi] poll_wait response:', r);
 			if (r && r.success) {
 				updateUI(r.data);
-				var quotaHit = r.data.quota_exhausted || false;
-				if (r.data.active && !stopped && !quotaHit) {
-					longPoll();
+				var quotaHit  = r.data.quota_exhausted || false;
+				var cycleDone = r.data.last_poll && r.data.last_poll.cycle_done;
+				var batchStatus = r.data.batch_status || '';
+				if (r.data.active && !stopped && !quotaHit && !cycleDone) {
+					// Back off when the server did no real work (e.g. cache not yet populated).
+					if (batchStatus.indexOf('early:') === 0 && batchStatus !== 'early:quota_exhausted') {
+						setTimeout(longPoll, 5000);
+					} else {
+						longPoll();
+					}
 				} else {
-					setBadgeStopped();
-					console.log('[dcGi] longPoll stopping: active=' + r.data.active + ' stopped=' + stopped + ' quotaHit=' + quotaHit);
+					if (!cycleDone) setBadgeStopped();
+					console.log('[dcGi] longPoll stopping: active=' + r.data.active + ' stopped=' + stopped + ' quotaHit=' + quotaHit + ' cycleDone=' + cycleDone + ' batchStatus=' + batchStatus);
 				}
 			}
 		})
