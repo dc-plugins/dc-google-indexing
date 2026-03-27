@@ -337,6 +337,7 @@ function dc_gi_poll_js(): string {
 (function($){
 	var lpXhr   = null;
 	var stopped = false;
+	var polling = false;
 	var lastTs  = 0;
 
 	function pct(seen, total) {
@@ -436,10 +437,12 @@ function dc_gi_poll_js(): string {
 	}
 
 	function longPoll() {
-		if (stopped) return;
+		if (stopped || polling) return;
+		polling = true;
 		console.log('[dcGi] longPoll fired');
 		lpXhr = $.post(dcGiPoll.ajaxurl, {action:'dc_gi_poll_wait', nonce:dcGiPoll.nonce})
 		.done(function(r) {
+			polling = false;
 			// If user stopped while this request was in-flight, ignore the response.
 			if (stopped) { setBadgeStopped(); return; }
 			if (typeof r === 'string') { try { r = JSON.parse(r); } catch(e) { r = null; } }
@@ -456,6 +459,7 @@ function dc_gi_poll_js(): string {
 			}
 		})
 		.fail(function(xhr) {
+			polling = false;
 			if (xhr.statusText === 'abort') return;
 			console.warn('[dcGi] poll_wait failed, retrying in 2s', xhr.status, xhr.statusText);
 			setTimeout(longPoll, 2000);
