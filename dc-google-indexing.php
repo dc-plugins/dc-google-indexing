@@ -22,6 +22,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 define( 'DC_GI_VERSION', '1.1.0' );
+define( 'DC_GI_DB_VERSION', '1.1.0' ); // Increment when the URL-cache table schema changes.
 define( 'DC_GI_FILE', __FILE__ );
 define( 'DC_GI_DIR', plugin_dir_path( __FILE__ ) );
 define( 'DC_GI_CRON_HOOK', 'dc_gi_process_queue' );
@@ -742,13 +743,33 @@ add_action( DC_GI_INSPECT_HOOK, 'dc_gi_run_inspect_batch' );
 function dc_gi_run_inspect_batch(): void {
 	$settings = dc_gi_get_settings();
 	if ( empty( $settings['service_account_json'] ) ) {
+		// Only log once per hour so we don't flood the log on every cron tick.
+		if ( false === get_transient( 'dc_gi_inspect_sa_warn' ) ) {
+			dc_gi_log_info( '', 'INSPECT_SKIP', __( 'Inspection cache not building — service account credentials not configured.', 'dc-google-indexing' ) );
+			set_transient( 'dc_gi_inspect_sa_warn', 1, HOUR_IN_SECONDS );
+		}
 		return;
 	}
 	$sa = json_decode( $settings['service_account_json'], true );
 	if ( ! $sa || empty( $sa['client_email'] ) || empty( $sa['private_key'] ) ) {
+		if ( false === get_transient( 'dc_gi_inspect_sa_warn' ) ) {
+			dc_gi_log_info( '', 'INSPECT_SKIP', __( 'Inspection cache not building — service account JSON is invalid (missing client_email or private_key).', 'dc-google-indexing' ) );
+			set_transient( 'dc_gi_inspect_sa_warn', 1, HOUR_IN_SECONDS );
+		}
 		return;
 	}
-	DC_GI_URL_Cache::run_inspect_batch( $sa );
+	$status = DC_GI_URL_Cache::run_inspect_batch( $sa );
+	if ( 0 === strpos( $status, 'early:sitemap_error' ) ) {
+		if ( false === get_transient( 'dc_gi_inspect_sitemap_warn' ) ) {
+			dc_gi_log_info( '', 'INSPECT_SITEMAP_ERR', $status );
+			set_transient( 'dc_gi_inspect_sitemap_warn', 1, HOUR_IN_SECONDS );
+		}
+	} elseif ( 'early:no_urls' === $status ) {
+		if ( false === get_transient( 'dc_gi_inspect_sitemap_warn' ) ) {
+			dc_gi_log_info( '', 'INSPECT_SITEMAP_ERR', __( 'Inspection cache not building — no URLs found in sitemap.', 'dc-google-indexing' ) );
+			set_transient( 'dc_gi_inspect_sitemap_warn', 1, HOUR_IN_SECONDS );
+		}
+	}
 }
 
 // =============================================================================
@@ -885,6 +906,7 @@ register_activation_hook( DC_GI_FILE, 'dc_gi_activate' );
  */
 function dc_gi_activate(): void {
 	DC_GI_URL_Cache::create_table();
+	update_option( 'dc_gi_db_version', DC_GI_DB_VERSION );
 	if ( ! wp_next_scheduled( DC_GI_CRON_HOOK ) ) {
 		wp_schedule_event( time(), 'dc_gi_every5', DC_GI_CRON_HOOK );
 	}
@@ -902,8 +924,20 @@ function dc_gi_activate(): void {
 add_action( 'init', 'dc_gi_maybe_reschedule_crons' );
 /**
  * Reschedule any missing WP-Cron events on every page load (self-healing).
+ * Also ensures the URL-cache table exists after plugin upgrades — WordPress
+ * does not fire register_activation_hook on updates, so users upgrading from
+ * v1.0.x (before the cache table was introduced) would otherwise never have
+ * the table created.
  */
 function dc_gi_maybe_reschedule_crons(): void {
+	// Create (or upgrade) the URL-cache DB table if this is a fresh install or a
+	// plugin upgrade that changed the schema.  dbDelta uses CREATE TABLE IF NOT EXISTS
+	// so this is safe to call repeatedly and is a no-op once the table is current.
+	if ( get_option( 'dc_gi_db_version' ) !== DC_GI_DB_VERSION ) {
+		DC_GI_URL_Cache::create_table();
+		update_option( 'dc_gi_db_version', DC_GI_DB_VERSION );
+	}
+
 	// Fire immediately — queue processor runs every 5 minutes.
 	if ( ! wp_next_scheduled( DC_GI_CRON_HOOK ) ) {
 		wp_schedule_event( time(), 'dc_gi_every5', DC_GI_CRON_HOOK );

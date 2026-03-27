@@ -23,11 +23,14 @@ delete_option( 'dc_gi_qa_active' );
 delete_option( 'dc_gi_qa_offset' );
 delete_option( 'dc_gi_qa_pending' );
 delete_option( 'dc_gi_qa_results' );
+delete_option( 'dc_gi_db_version' );
 delete_transient( 'dc_gi_access_token' );
 delete_transient( 'dc_gi_inspection_token' );
 delete_transient( 'dc_gi_last_poll' );
 delete_transient( 'dc_gi_poll_lock' );
 delete_transient( 'dc_gi_sitemap_urls_cache' );
+delete_transient( 'dc_gi_inspect_sa_warn' );
+delete_transient( 'dc_gi_inspect_sitemap_warn' );
 
 // Remove daily quota transients.
 global $wpdb;
