@@ -269,7 +269,10 @@ class DC_GI_JWT {
 			if ( 401 === $code ) {
 				delete_transient( 'dc_gi_inspection_token' );
 			}
-			return new WP_Error( 'dc_gi_inspect_error', $msg, [ 'status' => $code ] );
+			// Use a dedicated WP_Error code for quota exhaustion so callers can
+			// abort the batch cleanly without writing a bad cache entry.
+			$error_code = ( 429 === $code ) ? 'dc_gi_inspect_quota_exceeded' : 'dc_gi_inspect_error';
+			return new WP_Error( $error_code, $msg, [ 'status' => $code ] );
 		}
 
 		return (array) $body;

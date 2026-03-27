@@ -2204,13 +2204,14 @@ function dc_gi_render_page(): void {
 	$settings = dc_gi_get_settings();
 	// Bypass Redis persistent object cache so the queue count is always fresh.
 	wp_cache_delete( 'dc_gi_queue', 'options' );
-	$queue       = get_option( 'dc_gi_queue', [] );
-	$log         = get_option( 'dc_gi_log', [] );
-	$watchlist   = dc_gi_watchlist_get();
-	$quota_used  = dc_gi_get_quota_used();
-	$quota_limit = min( 200, (int) ( $settings['daily_quota'] ?? 200 ) );
-	$has_sa      = ! empty( $settings['service_account_json'] );
-	$sa_email    = '';
+	$queue              = get_option( 'dc_gi_queue', [] );
+	$log                = get_option( 'dc_gi_log', [] );
+	$watchlist          = dc_gi_watchlist_get();
+	$quota_used         = dc_gi_get_quota_used();
+	$quota_limit        = min( 200, (int) ( $settings['daily_quota'] ?? 200 ) );
+	$inspect_quota_used = dc_gi_get_inspect_quota_used();
+	$has_sa             = ! empty( $settings['service_account_json'] );
+	$sa_email           = '';
 	if ( $has_sa ) {
 		$sa_decoded = json_decode( $settings['service_account_json'], true );
 		$sa_email   = $sa_decoded['client_email'] ?? '';
@@ -3158,7 +3159,13 @@ function dc_gi_render_page(): void {
 			</div>
 			<div class="dc-gi-callout warn">
 				<strong><?php esc_html_e( '⚠️ Inspection quota', 'dc-google-indexing' ); ?></strong><br>
-				<?php esc_html_e( 'The background inspection cron uses up to 3 × 60 × 24 = 4,320 Inspection API calls/day to keep the cache fresh. Only actual submissions draw against the Indexing API quota (200/day). Polling itself makes no API calls.', 'dc-google-indexing' ); ?>
+				<?php
+				printf(
+					/* translators: %d: Google's URL Inspection API hard cap per day */
+					esc_html__( 'The background inspection cron calls the Google URL Inspection API up to 3×/minute. Google hard-caps this at %d calls/day — the cron stops automatically when that limit is reached and resumes the next day. Only Indexing API submissions (200/day) count against the submission quota.', 'dc-google-indexing' ),
+					(int) DC_GI_INSPECT_DAILY_CAP
+				);
+				?>
 			</div>
 		</div>
 
@@ -3324,7 +3331,8 @@ function dc_gi_render_page(): void {
 
 			<p style="font-size:11px;color:#7a8499;margin:16px 0 0;padding-top:14px;border-top:1px solid rgba(45,53,85,.5)">
 				<?php esc_html_e( '50 URLs per batch · runs every 1 minute via WP-Cron · continues if you leave this page', 'dc-google-indexing' ); ?>&ensp;|&ensp;<?php esc_html_e( 'Queue:', 'dc-google-indexing' ); ?> <strong style="color:#c8d0e0" id="dc-gi-queue-count">—</strong>
-				&ensp;|&ensp;<?php esc_html_e( 'Quota today:', 'dc-google-indexing' ); ?> <strong style="color:<?php echo esc_attr( dc_gi_is_quota_exhausted() ? '#fd5d93' : '#c8d0e0' ); ?>" id="dc-gi-quota-live"><?php echo esc_html( $quota_used . ' / ' . $quota_limit ); ?></strong>
+				&ensp;|&ensp;<?php esc_html_e( 'Indexing quota:', 'dc-google-indexing' ); ?> <strong style="color:<?php echo esc_attr( dc_gi_is_quota_exhausted() ? '#fd5d93' : '#c8d0e0' ); ?>" id="dc-gi-quota-live"><?php echo esc_html( $quota_used . ' / ' . $quota_limit ); ?></strong>
+				&ensp;|&ensp;<?php esc_html_e( 'Inspection quota:', 'dc-google-indexing' ); ?> <strong style="color:<?php echo esc_attr( dc_gi_is_inspect_quota_exhausted() ? '#fd5d93' : '#c8d0e0' ); ?>"><?php echo esc_html( $inspect_quota_used . ' / ' . DC_GI_INSPECT_DAILY_CAP ); ?></strong>
 			</p>
 		</div>
 

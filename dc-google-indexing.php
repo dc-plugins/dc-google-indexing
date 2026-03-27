@@ -31,6 +31,11 @@ define( 'DC_GI_WATCH_CHECK_HOOK', 'dc_gi_watch_check_one_cron' );
 define( 'DC_GI_POLL_HOOK', 'dc_gi_poll_batch' );
 define( 'DC_GI_INSPECT_HOOK', 'dc_gi_inspect_batch' );
 define( 'DC_GI_DAILY_CAP', 200 );
+/**
+ * Google URL Inspection API hard cap — 2,000 requests per day per project.
+ * This is separate from the Indexing API submission quota (DC_GI_DAILY_CAP).
+ */
+define( 'DC_GI_INSPECT_DAILY_CAP', 2000 );
 
 /**
  * Return the current date string in Pacific Time (America/Los_Angeles).
@@ -769,6 +774,20 @@ function dc_gi_run_inspect_batch(): void {
 			dc_gi_log_info( '', 'INSPECT_SITEMAP_ERR', __( 'Inspection cache not building — no URLs found in sitemap.', 'dc-google-indexing' ) );
 			set_transient( 'dc_gi_inspect_sitemap_warn', 1, HOUR_IN_SECONDS );
 		}
+	} elseif ( 'early:inspect_quota_exhausted' === $status ) {
+		// Log once per day when the Inspection API daily quota (2,000 calls) is exhausted.
+		if ( false === get_transient( 'dc_gi_inspect_quota_warn' ) ) {
+			dc_gi_log_info(
+				'',
+				'INSPECT_QUOTA',
+				sprintf(
+					/* translators: %d: Inspection API daily quota limit */
+					__( 'URL Inspection API daily quota exhausted (%d/day). Cache will resume building tomorrow.', 'dc-google-indexing' ),
+					DC_GI_INSPECT_DAILY_CAP
+				)
+			);
+			set_transient( 'dc_gi_inspect_quota_warn', 1, DAY_IN_SECONDS );
+		}
 	}
 }
 
@@ -829,6 +848,36 @@ function dc_gi_is_quota_exhausted(): bool {
 	$settings = dc_gi_get_settings();
 	$limit    = min( DC_GI_DAILY_CAP, (int) ( $settings['daily_quota'] ?? DC_GI_DAILY_CAP ) );
 	return dc_gi_get_quota_used() >= $limit;
+}
+
+/**
+ * Return the number of URL Inspection API calls made today (Pacific Time).
+ *
+ * Tracked separately from the Indexing API submission quota.
+ *
+ * @return int Number of inspection calls used against today's quota.
+ */
+function dc_gi_get_inspect_quota_used(): int {
+	return (int) get_transient( 'dc_gi_inspect_quota_' . dc_gi_quota_date_key() );
+}
+
+/**
+ * Increment the Inspection API daily counter and return the new value.
+ *
+ * @return int New usage count after incrementing.
+ */
+function dc_gi_increment_inspect_quota(): int {
+	$key  = 'dc_gi_inspect_quota_' . dc_gi_quota_date_key();
+	$used = (int) get_transient( $key ) + 1;
+	set_transient( $key, $used, DAY_IN_SECONDS );
+	return $used;
+}
+
+/**
+ * Return true when the daily URL Inspection API quota (2,000) is fully consumed.
+ */
+function dc_gi_is_inspect_quota_exhausted(): bool {
+	return dc_gi_get_inspect_quota_used() >= DC_GI_INSPECT_DAILY_CAP;
 }
 
 // =============================================================================

@@ -31,11 +31,12 @@ delete_transient( 'dc_gi_poll_lock' );
 delete_transient( 'dc_gi_sitemap_urls_cache' );
 delete_transient( 'dc_gi_inspect_sa_warn' );
 delete_transient( 'dc_gi_inspect_sitemap_warn' );
+delete_transient( 'dc_gi_inspect_quota_warn' );
 
-// Remove daily quota transients.
+// Remove daily quota transients (Indexing API + Inspection API).
 global $wpdb;
 $wpdb->query( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-	"DELETE FROM {$wpdb->options} WHERE option_name LIKE '_transient_dc_gi_quota_%' OR option_name LIKE '_transient_timeout_dc_gi_quota_%'"
+	"DELETE FROM {$wpdb->options} WHERE option_name LIKE '_transient_dc_gi_quota_%' OR option_name LIKE '_transient_timeout_dc_gi_quota_%' OR option_name LIKE '_transient_dc_gi_inspect_quota_%' OR option_name LIKE '_transient_timeout_dc_gi_inspect_quota_%'"
 );
 
 wp_clear_scheduled_hook( 'dc_gi_process_queue' );

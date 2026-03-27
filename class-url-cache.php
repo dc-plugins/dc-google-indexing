@@ -385,9 +385,14 @@ class DC_GI_URL_Cache {
 	 * Returns a short status string (for logging / admin AJAX).
 	 *
 	 * @param array $sa Decoded service-account JSON credentials.
-	 * @return string  'ok', 'ok:complete', 'early:sitemap_error', 'early:no_urls'
+	 * @return string  'ok', 'ok:complete', 'early:sitemap_error', 'early:no_urls', 'early:inspect_quota_exhausted'
 	 */
 	public static function run_inspect_batch( array $sa ): string {
+		// Bail immediately when the Inspection API daily quota (2,000/day) is gone.
+		if ( dc_gi_is_inspect_quota_exhausted() ) {
+			return 'early:inspect_quota_exhausted';
+		}
+
 		$site_url = trailingslashit( get_home_url() );
 
 		$all_urls = DC_GI_Sitemap::get_urls( 2000 );
@@ -408,10 +413,19 @@ class DC_GI_URL_Cache {
 			$result = DC_GI_JWT::inspect_url( $sa, $url, $site_url );
 
 			if ( is_wp_error( $result ) ) {
-				// Store a placeholder so we don't hammer a broken URL every minute.
+				// 429 = Inspection API quota exhausted — abort without writing a bad
+				// cache entry so the URL will be retried tomorrow.
+				if ( 'dc_gi_inspect_quota_exceeded' === $result->get_error_code() ) {
+					return 'early:inspect_quota_exhausted';
+				}
+				// Other transient errors — store a placeholder so we don't hammer
+				// a broken URL every minute, but keep processing remaining candidates.
 				self::upsert( $url, 'VERDICT_UNSPECIFIED', 'inspect_error: ' . $result->get_error_message() );
 				continue;
 			}
+
+			// Count every successful Inspection API call against the daily quota.
+			dc_gi_increment_inspect_quota();
 
 			$parsed = self::parse_api_result( $result );
 			self::upsert( $url, $parsed['index_verdict'], $parsed['coverage_state'], $parsed['page_fetch_state'] );
