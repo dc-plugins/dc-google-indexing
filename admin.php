@@ -330,7 +330,7 @@ function dc_gi_quota_exhausted_notice(): void {
 			<?php
 			printf(
 				/* translators: 1: used count, 2: daily limit */
-				esc_html__( '(%1$d / %2$d submissions used today). Queue processing, polling and watchlist re-submissions are paused until the quota resets at midnight Pacific Time.', 'dc-google-indexing' ),
+				esc_html__( '(%1$d / %2$d submissions used today). Queue processing and watchlist re-submissions are paused until the quota resets at midnight Pacific Time.', 'dc-google-indexing' ),
 				(int) $quota_used,
 				(int) $quota_limit
 			);
@@ -374,10 +374,7 @@ function dc_gi_poll_js(): string {
 
 		var badgeText;
 		var badgeClass;
-		if (quotaHit) {
-			badgeText  = dcGiPoll.i18n.quotaExhausted;
-			badgeClass = 'stopped';
-		} else if (done) {
+		if (done) {
 			badgeText  = dcGiPoll.i18n.done;
 			badgeClass = 'done';
 		} else if (active) {
@@ -390,7 +387,7 @@ function dc_gi_poll_js(): string {
 		var $badge = $('#dc-gi-status-badge');
 		$badge.attr('class', 'dc-gi-poll-badge ' + badgeClass);
 		$badge.find('.dc-gi-spinner').remove();
-		if (active && !done && !quotaHit) {
+		if (active && !done) {
 			$badge.prepend('<span class="dc-gi-spinner"></span>');
 		}
 		$badge.find('.dc-gi-badge-text').text(badgeText);
@@ -426,8 +423,8 @@ function dc_gi_poll_js(): string {
 			$('#dc-gi-cache-stat-total').text(cacheTotal);
 			$('#dc-gi-cache-stat-excl').text(cacheExcluded);
 		}
-		$('#dc-gi-start-btn').prop('disabled', active || quotaHit).text('\u25b6 Start Polling');
-		$('#dc-gi-stop-btn').prop('disabled', !active || quotaHit);
+		$('#dc-gi-start-btn').prop('disabled', active).text('\u25b6 Start Polling');
+		$('#dc-gi-stop-btn').prop('disabled', !active);
 	}
 
 	function setBadgeRunning() {
@@ -462,19 +459,18 @@ function dc_gi_poll_js(): string {
 			console.log('[dcGi] poll_wait response:', r);
 			if (r && r.success) {
 				updateUI(r.data);
-				var quotaHit  = r.data.quota_exhausted || false;
 				var cycleDone = r.data.last_poll && r.data.last_poll.cycle_done;
 				var batchStatus = r.data.batch_status || '';
-				if (r.data.active && !stopped && !quotaHit && !cycleDone) {
+				if (r.data.active && !stopped && !cycleDone) {
 					// Back off when the server did no real work (e.g. cache not yet populated).
-					if (batchStatus.indexOf('early:') === 0 && batchStatus !== 'early:quota_exhausted') {
+					if (batchStatus.indexOf('early:') === 0) {
 						setTimeout(longPoll, 5000);
 					} else {
 						longPoll();
 					}
 				} else {
 					if (!cycleDone) setBadgeStopped();
-					console.log('[dcGi] longPoll stopping: active=' + r.data.active + ' stopped=' + stopped + ' quotaHit=' + quotaHit + ' cycleDone=' + cycleDone + ' batchStatus=' + batchStatus);
+					console.log('[dcGi] longPoll stopping: active=' + r.data.active + ' stopped=' + stopped + ' cycleDone=' + cycleDone + ' batchStatus=' + batchStatus);
 				}
 			}
 		})
@@ -484,14 +480,6 @@ function dc_gi_poll_js(): string {
 			console.warn('[dcGi] poll_wait failed, retrying in 2s', xhr.status, xhr.statusText);
 			setTimeout(longPoll, 2000);
 		});
-	}
-
-	// Disable start button immediately if quota is already exhausted on page load.
-	if (dcGiPoll.quotaExhausted) {
-		$('#dc-gi-start-btn').prop('disabled', true);
-		var $badge = $('#dc-gi-status-badge');
-		$badge.attr('class', 'dc-gi-poll-badge stopped');
-		$badge.find('.dc-gi-badge-text').text(dcGiPoll.i18n.quotaExhausted);
 	}
 
 	$(function(){
@@ -3767,24 +3755,10 @@ function dc_gi_render_page(): void {
 		</div>
 		<?php else : ?>
 
-			<?php if ( dc_gi_is_quota_exhausted() ) : ?>
-		<div class="dc-gi-callout err" style="margin-bottom:16px">
-			<strong><?php esc_html_e( '🚫 Daily quota exhausted', 'dc-google-indexing' ); ?></strong> &mdash;
-				<?php
-				printf(
-				/* translators: 1: used count, 2: limit */
-					esc_html__( '%1$d / %2$d submissions used today. Polling is paused until quota resets at midnight UTC.', 'dc-google-indexing' ),
-					esc_html( (string) $quota_used ),
-					esc_html( (string) $quota_limit )
-				);
-				?>
-		</div>
-		<?php endif; ?>
-
 		<div class="dc-gi-live-panel">
 			<div class="dc-gi-live-btn-row">
 				<span id="dc-gi-status-badge" class="dc-gi-poll-badge stopped"><span class="dc-gi-badge-text"><?php esc_html_e( '○ Stopped', 'dc-google-indexing' ); ?></span></span>
-				<button id="dc-gi-start-btn" class="button dc-gi-btn-start" <?php disabled( dc_gi_is_quota_exhausted() ); ?>><?php esc_html_e( '▶ Start Polling', 'dc-google-indexing' ); ?></button>
+				<button id="dc-gi-start-btn" class="button dc-gi-btn-start"><?php esc_html_e( '▶ Start Polling', 'dc-google-indexing' ); ?></button>
 				<button id="dc-gi-stop-btn" class="button dc-gi-btn-stop" disabled><?php esc_html_e( '■ Stop', 'dc-google-indexing' ); ?></button>
 				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin:0">
 					<?php wp_nonce_field( 'dc_gi_poll_reset' ); ?>

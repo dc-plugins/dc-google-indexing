@@ -604,16 +604,12 @@ add_action( DC_GI_POLL_HOOK, 'dc_gi_run_poll_batch' );
  * WP-Cron callback: read excluded URLs from the inspection cache and enqueue them for submission.
  *
  * @param bool $force Skip the active-flag check when triggered manually.
- * @return string Status string such as 'ok', 'early:quota_exhausted', 'cycle_complete'.
+ * @return string Status string such as 'ok', 'cycle_complete', 'early:not_active', 'early:locked', 'early:cache_empty'.
  */
 function dc_gi_run_poll_batch( bool $force = false ): string {
 	// Only run when polling is active (skip check when forced via manual trigger).
 	if ( ! $force && ! get_option( 'dc_gi_poll_active', false ) ) {
 		return 'early:not_active';
-	}
-	// Stop polling when the daily Indexing API quota is exhausted.
-	if ( dc_gi_is_quota_exhausted() ) {
-		return 'early:quota_exhausted';
 	}
 	// Simple lock to prevent concurrent cron + AJAX runs.
 	if ( get_transient( 'dc_gi_poll_lock' ) ) {
