@@ -6,7 +6,7 @@
  * Plugin Name: DC Google Indexing
  * Plugin URI:  https://github.com/dc-plugins/dc-google-indexing
  * Description: Submit URLs to Google's Web Search Indexing API for instant crawling. Supports manual batch submission and automatic submission on publish/update.
- * Version:     1.2.0
+ * Version:     1.3.0
  * Author:      lennilg
  * Author URI:  https://www.dampcig.dk
  * License:     GPL-2.0+
@@ -220,6 +220,7 @@ function dc_gi_on_post_password_set( int $post_id, WP_Post $post_after, WP_Post 
 		'added' => time(),
 	];
 	update_option( 'dc_gi_queue', $queue, false );
+	wp_cache_delete( 'dc_gi_queue', 'options' ); // Force-bust Redis persistent object cache.
 }
 
 // =============================================================================
@@ -245,6 +246,7 @@ function dc_gi_enqueue_url( string $url, string $type = 'URL_UPDATED' ): void {
 		'added' => time(),
 	];
 	update_option( 'dc_gi_queue', $queue, false );
+	wp_cache_delete( 'dc_gi_queue', 'options' ); // Force-bust Redis persistent object cache.
 }
 
 add_action( DC_GI_CRON_HOOK, 'dc_gi_process_queue' );
@@ -770,11 +772,6 @@ function dc_gi_run_inspect_batch(): void {
 	if ( 'early:quota_backoff' === $status ) {
 		// URL Inspection API quota is temporarily exhausted — cron will retry after backoff expires.
 		return;
-	} elseif ( 0 === strpos( $status, 'early:sitemap_error' ) ) {
-		if ( false === get_transient( 'dc_gi_inspect_sitemap_warn' ) ) {
-			dc_gi_log_info( '', 'INSPECT_SITEMAP_ERR', $status );
-			set_transient( 'dc_gi_inspect_sitemap_warn', 1, HOUR_IN_SECONDS );
-		}
 	} elseif ( 'early:no_urls' === $status ) {
 		if ( false === get_transient( 'dc_gi_inspect_sitemap_warn' ) ) {
 			dc_gi_log_info( '', 'INSPECT_SITEMAP_ERR', __( 'Inspection cache not building — no URLs found in sitemap.', 'dc-google-indexing' ) );

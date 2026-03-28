@@ -73,26 +73,28 @@ class DC_GI_Sitemap {
 			}
 		}
 
-		// 2. Common sitemap locations (fallback when robots.txt has none)
-		$candidates = [
-			get_home_url( null, '/wp-sitemap.xml' ),      // WordPress 5.5+ built-in.
-			get_home_url( null, '/sitemap_index.xml' ),   // Yoast SEO.
-			get_home_url( null, '/sitemap.xml' ),         // Generic / RankMath.
-			get_home_url( null, '/sitemap-index.xml' ),   // AIOSEO.
-		];
+		// 2. Common sitemap locations (fallback when robots.txt has none).
+		if ( empty( $found ) ) {
+			$candidates = [
+				get_home_url( null, '/wp-sitemap.xml' ),      // WordPress 5.5+ built-in.
+				get_home_url( null, '/sitemap_index.xml' ),   // Yoast SEO.
+				get_home_url( null, '/sitemap.xml' ),         // Generic / RankMath.
+				get_home_url( null, '/sitemap-index.xml' ),   // AIOSEO.
+			];
 
-		foreach ( $candidates as $candidate ) {
-			$head = wp_remote_head(
-				$candidate,
-				[
-					'timeout'     => 5,
-					'redirection' => 3,
-				]
-			);
-			if ( ! is_wp_error( $head )
-				&& 200 === (int) wp_remote_retrieve_response_code( $head ) ) {
-				$found[] = $candidate;
-				break; // Use only the first valid candidate.
+			foreach ( $candidates as $candidate ) {
+				$head = wp_remote_head(
+					$candidate,
+					[
+						'timeout'     => 5,
+						'redirection' => 3,
+					]
+				);
+				if ( ! is_wp_error( $head )
+					&& 200 === (int) wp_remote_retrieve_response_code( $head ) ) {
+					$found[] = $candidate;
+					break; // Use only the first valid candidate.
+				}
 			}
 		}
 
