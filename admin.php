@@ -425,7 +425,7 @@ function dc_gi_poll_js(): string {
 			$('#dc-gi-cache-stat-total').text(cacheTotal);
 			$('#dc-gi-cache-stat-excl').text(cacheExcluded);
 		}
-		$('#dc-gi-start-btn').prop('disabled', active || done || quotaHit).text('\u25b6 Start Polling');
+		$('#dc-gi-start-btn').prop('disabled', active || quotaHit).text('\u25b6 Start Polling');
 		$('#dc-gi-stop-btn').prop('disabled', !active || quotaHit);
 	}
 
@@ -2339,6 +2339,7 @@ function dc_gi_ajax_index_status(): void {
 			'excluded'       => DC_GI_URL_Cache::count_excluded(),
 			'age_days'       => DC_GI_URL_Cache::oldest_entry_age_days(),
 			'inspect_errors' => DC_GI_URL_Cache::get_inspect_error_count(),
+			'quota_backoff'  => (bool) get_transient( 'dc_gi_inspect_quota_backoff' ),
 		]
 	);
 }
@@ -3587,6 +3588,11 @@ function dc_gi_render_page(): void {
 			$cache_excluded = DC_GI_URL_Cache::count_excluded();
 			$cache_age      = DC_GI_URL_Cache::oldest_entry_age_days();
 			?>
+			<?php if ( get_transient( 'dc_gi_inspect_quota_backoff' ) ) : ?>
+		<div class="dc-gi-callout warn" style="margin-bottom:12px">
+				<?php esc_html_e( 'URL Inspection API quota temporarily exhausted — background inspection is paused for up to 1 hour. The cache will resume building automatically once the quota window resets.', 'dc-google-indexing' ); ?>
+		</div>
+		<?php endif; ?>
 		<div class="dc-gi-callout" style="background:#1a1f38;border-color:#2a3055;margin-bottom:16px;display:flex;align-items:center;gap:32px;flex-wrap:wrap">
 			<div>
 				<span style="font-size:11px;color:#7a8499;display:block;margin-bottom:2px"><?php esc_html_e( 'Inspection cache', 'dc-google-indexing' ); ?></span>
@@ -4303,6 +4309,16 @@ function dc_gi_render_page(): void {
 		<h2 style="margin-top:0"><?php esc_html_e( 'Index Status Overview', 'dc-google-indexing' ); ?></h2>
 		<p style="color:#8892a4;max-width:720px;font-size:13px;margin-bottom:20px"><?php esc_html_e( 'Live snapshot of all URLs in the inspection cache, grouped by coverage state and index verdict. The stat cards auto-refresh every 30 seconds.', 'dc-google-indexing' ); ?></p>
 
+			<?php if ( get_transient( 'dc_gi_inspect_quota_backoff' ) ) : ?>
+		<div class="dc-gi-callout warn" id="dc-gi-is-quota-backoff" style="max-width:700px;margin-bottom:18px">
+				<?php esc_html_e( 'URL Inspection API quota temporarily exhausted — background inspection is paused for up to 1 hour. The cache will resume building automatically once the quota window resets. Data shown below reflects what was cached before the quota was hit.', 'dc-google-indexing' ); ?>
+		</div>
+		<?php else : ?>
+		<div class="dc-gi-callout warn" id="dc-gi-is-quota-backoff" style="max-width:700px;margin-bottom:18px;display:none">
+			<?php esc_html_e( 'URL Inspection API quota temporarily exhausted — background inspection is paused for up to 1 hour. The cache will resume building automatically once the quota window resets. Data shown below reflects what was cached before the quota was hit.', 'dc-google-indexing' ); ?>
+		</div>
+		<?php endif; ?>
+
 			<?php
 			$is_counts   = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::get_verdict_counts() : [];
 			$is_coverage = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::get_coverage_state_breakdown() : [];
@@ -4821,6 +4837,9 @@ function dc_gi_render_page(): void {
 					setNum( 'is-stat-age',      null != d.age_days ? d.age_days : '\u2014' );
 					var ts = document.getElementById( 'dc-gi-is-ts' );
 					if ( ts ) { ts.textContent = '<?php echo esc_js( __( 'Stats updated:', 'dc-google-indexing' ) ); ?> ' + new Date().toLocaleTimeString(); }
+					// Show/hide the inspection quota backoff notice.
+					var qbEl = document.getElementById( 'dc-gi-is-quota-backoff' );
+					if ( qbEl ) { qbEl.style.display = d.quota_backoff ? '' : 'none'; }
 					// Also reload the URL table to stay current.
 					loadUrlTable( isPage, isFilter, null, null );
 				} );

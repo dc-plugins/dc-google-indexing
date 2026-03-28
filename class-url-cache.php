@@ -539,7 +539,7 @@ class DC_GI_URL_Cache {
 
 	/**
 	 * Run one inspection batch:
-	 *  1. Fetch sitemap URLs.
+	 *  1. Fetch sitemap URLs (cached for 5 minutes to reduce HTTP overhead).
 	 *  2. Find the first DC_GI_INSPECT_BATCH_SIZE that are absent or stale.
 	 *  3. Call DC_GI_JWT::inspect_url() for each and cache the result.
 	 *
@@ -547,16 +547,22 @@ class DC_GI_URL_Cache {
 	 * Returns a short status string (for logging / admin AJAX).
 	 *
 	 * @param array $sa Decoded service-account JSON credentials.
-	 * @return string  'ok', 'ok:complete', 'early:sitemap_error', 'early:no_urls'
+	 * @return string  'ok', 'ok:complete', 'early:sitemap_error', 'early:no_urls', 'early:quota_backoff'
 	 */
 	public static function run_inspect_batch( array $sa ): string {
+		// Bail early when the URL Inspection API quota is known to be exhausted.
+		// The backoff transient is set for 1 hour so the cron doesn't hammer the API.
+		if ( get_transient( 'dc_gi_inspect_quota_backoff' ) ) {
+			return 'early:quota_backoff';
+		}
+
 		$site_url = dc_gi_get_search_console_property();
 
-		$all_urls = DC_GI_Sitemap::get_urls( 2000 );
-		if ( is_wp_error( $all_urls ) || empty( $all_urls ) ) {
-			return is_wp_error( $all_urls )
-				? 'early:sitemap_error:' . $all_urls->get_error_message()
-				: 'early:no_urls';
+		// Use the cached sitemap URL list to avoid making HTTP requests on every
+		// 1-minute cron tick — the cache is refreshed automatically every 5 minutes.
+		$all_urls = dc_gi_get_sitemap_urls_cached();
+		if ( empty( $all_urls ) ) {
+			return 'early:no_urls';
 		}
 
 		$candidates = self::get_urls_needing_inspection( $all_urls, DC_GI_INSPECT_BATCH_SIZE );
@@ -570,9 +576,10 @@ class DC_GI_URL_Cache {
 			$result = DC_GI_JWT::inspect_url( $sa, $url, $site_url );
 
 			if ( is_wp_error( $result ) ) {
-				// 429 = Inspection API rate-limited — abort without writing a bad
-				// cache entry so the URL will be retried on the next cron run.
+				// 429 = Inspection API rate-limited — set a 1-hour backoff so subsequent
+				// cron runs skip API calls until the quota window resets.
 				if ( 'dc_gi_inspect_quota_exceeded' === $result->get_error_code() ) {
+					set_transient( 'dc_gi_inspect_quota_backoff', 1, HOUR_IN_SECONDS );
 					return 'ok';
 				}
 				// Other transient errors — store a placeholder so we don't hammer

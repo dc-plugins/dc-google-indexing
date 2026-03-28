@@ -638,7 +638,9 @@ function dc_gi_run_poll_batch( bool $force = false ): string {
 		$candidates = DC_GI_URL_Cache::get_excluded_urls( $batch_size, $skip_urls );
 
 		if ( empty( $candidates ) ) {
-			// Full cycle done — reset cursor and begin the next cycle automatically.
+			// Full cycle done — deactivate polling so the cron does not restart automatically.
+			// The user must click "Start Polling" again to begin a fresh cycle.
+			dc_gi_set_poll_active( false );
 			delete_option( 'dc_gi_poll_seen' );
 			$cache_excluded = DC_GI_URL_Cache::count_excluded();
 			set_transient(
@@ -767,7 +769,10 @@ function dc_gi_run_inspect_batch(): void {
 		return;
 	}
 	$status = DC_GI_URL_Cache::run_inspect_batch( $sa );
-	if ( 0 === strpos( $status, 'early:sitemap_error' ) ) {
+	if ( 'early:quota_backoff' === $status ) {
+		// URL Inspection API quota is temporarily exhausted — cron will retry after backoff expires.
+		return;
+	} elseif ( 0 === strpos( $status, 'early:sitemap_error' ) ) {
 		if ( false === get_transient( 'dc_gi_inspect_sitemap_warn' ) ) {
 			dc_gi_log_info( '', 'INSPECT_SITEMAP_ERR', $status );
 			set_transient( 'dc_gi_inspect_sitemap_warn', 1, HOUR_IN_SECONDS );
