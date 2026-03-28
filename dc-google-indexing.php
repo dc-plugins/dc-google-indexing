@@ -22,7 +22,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 define( 'DC_GI_VERSION', '1.2.0' );
-define( 'DC_GI_DB_VERSION', '1.2.0' ); // Increment when the URL-cache table schema changes.
+define( 'DC_GI_DB_VERSION', '1.3.0' ); // Increment when the URL-cache table schema changes.
 define( 'DC_GI_FILE', __FILE__ );
 define( 'DC_GI_DIR', plugin_dir_path( __FILE__ ) );
 define( 'DC_GI_CRON_HOOK', 'dc_gi_process_queue' );

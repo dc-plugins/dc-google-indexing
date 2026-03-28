@@ -57,6 +57,8 @@ class DC_GI_URL_Cache {
 	/**
 	 * Create (or upgrade) the cache table.
 	 * Safe to call on every activation — uses CREATE TABLE IF NOT EXISTS.
+	 * After dbDelta, calls maybe_upgrade_columns() to explicitly add any columns
+	 * that dbDelta may have silently skipped on existing tables.
 	 */
 	public static function create_table(): void {
 		global $wpdb;
@@ -82,6 +84,47 @@ class DC_GI_URL_Cache {
 
 		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 		dbDelta( $sql );
+
+		// dbDelta is unreliable when adding columns to tables that already have rows.
+		// Explicitly add any columns that may have been skipped.
+		self::maybe_upgrade_columns();
+	}
+
+	/**
+	 * Explicitly add any schema columns that dbDelta may have missed on existing
+	 * tables.  Uses INFORMATION_SCHEMA so it is safe to call repeatedly — it is
+	 * a no-op when all columns already exist.
+	 */
+	public static function maybe_upgrade_columns(): void {
+		global $wpdb;
+		$table = self::table();
+
+		// Map of column name => ALTER TABLE fragment (type + constraints).
+		$expected = [
+			'robots_txt_state' => "VARCHAR(30) NOT NULL DEFAULT ''",
+			'indexing_state'   => "VARCHAR(60) NOT NULL DEFAULT ''",
+			'last_crawl_time'  => 'DATETIME NULL DEFAULT NULL',
+			'google_canonical' => "VARCHAR(600) NOT NULL DEFAULT ''",
+			'user_canonical'   => "VARCHAR(600) NOT NULL DEFAULT ''",
+			'crawled_as'       => "VARCHAR(20) NOT NULL DEFAULT ''",
+			'rich_results'     => 'TEXT NOT NULL',
+		];
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+		$existing = $wpdb->get_col(
+			$wpdb->prepare(
+				'SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s',
+				DB_NAME,
+				$table
+			)
+		);
+
+		foreach ( $expected as $col => $definition ) {
+			if ( ! in_array( $col, (array) $existing, true ) ) {
+				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.SchemaChange,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared
+				$wpdb->query( "ALTER TABLE `{$table}` ADD COLUMN `{$col}` {$definition}" );
+			}
+		}
 	}
 
 	/**
