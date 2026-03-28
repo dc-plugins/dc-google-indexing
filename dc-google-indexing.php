@@ -749,8 +749,15 @@ function dc_gi_run_poll_batch( bool $force = false ): string {
 add_action( DC_GI_INSPECT_HOOK, 'dc_gi_run_inspect_batch' );
 /**
  * WP-Cron callback: run one inspection batch to populate the URL cache from the sitemap.
+ *
+ * Returns the status string from DC_GI_URL_Cache::run_inspect_batch(), or
+ * 'early:no_sa' when service-account credentials are missing/invalid.
+ * The cron hook ignores this return value; callers such as the long-poll
+ * AJAX handler use it to surface the reason the cache is not yet populated.
+ *
+ * @return string Status string: 'ok', 'ok:complete', 'early:no_sa', 'early:quota_backoff', 'early:no_urls'.
  */
-function dc_gi_run_inspect_batch(): void {
+function dc_gi_run_inspect_batch(): string {
 	$settings = dc_gi_get_settings();
 	if ( empty( $settings['service_account_json'] ) ) {
 		// Only log once per hour so we don't flood the log on every cron tick.
@@ -758,7 +765,7 @@ function dc_gi_run_inspect_batch(): void {
 			dc_gi_log_info( '', 'INSPECT_SKIP', __( 'Inspection cache not building — service account credentials not configured.', 'dc-google-indexing' ) );
 			set_transient( 'dc_gi_inspect_sa_warn', 1, HOUR_IN_SECONDS );
 		}
-		return;
+		return 'early:no_sa';
 	}
 	$sa = json_decode( $settings['service_account_json'], true );
 	if ( ! $sa || empty( $sa['client_email'] ) || empty( $sa['private_key'] ) ) {
@@ -766,18 +773,19 @@ function dc_gi_run_inspect_batch(): void {
 			dc_gi_log_info( '', 'INSPECT_SKIP', __( 'Inspection cache not building — service account JSON is invalid (missing client_email or private_key).', 'dc-google-indexing' ) );
 			set_transient( 'dc_gi_inspect_sa_warn', 1, HOUR_IN_SECONDS );
 		}
-		return;
+		return 'early:no_sa';
 	}
 	$status = DC_GI_URL_Cache::run_inspect_batch( $sa );
 	if ( 'early:quota_backoff' === $status ) {
 		// URL Inspection API quota is temporarily exhausted — cron will retry after backoff expires.
-		return;
+		return $status;
 	} elseif ( 'early:no_urls' === $status ) {
 		if ( false === get_transient( 'dc_gi_inspect_sitemap_warn' ) ) {
 			dc_gi_log_info( '', 'INSPECT_SITEMAP_ERR', __( 'Inspection cache not building — no URLs found in sitemap.', 'dc-google-indexing' ) );
 			set_transient( 'dc_gi_inspect_sitemap_warn', 1, HOUR_IN_SECONDS );
 		}
 	}
+	return $status;
 }
 
 // =============================================================================

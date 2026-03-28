@@ -463,7 +463,11 @@ function dc_gi_poll_js(): string {
 				var batchStatus = r.data.batch_status || '';
 				if (r.data.active && !stopped && !cycleDone) {
 					// Back off when the server did no real work (e.g. cache not yet populated).
-					if (batchStatus.indexOf('early:') === 0) {
+					// Use a longer delay for states where inspection is known to be blocked —
+					// quota backoff lasts up to 1 hour, so spinning every 5 s is wasteful.
+					if (batchStatus === 'early:quota_backoff' || batchStatus === 'early:no_urls' || batchStatus === 'early:no_sa') {
+						setTimeout(longPoll, 60000);
+					} else if (batchStatus.indexOf('early:') === 0) {
 						setTimeout(longPoll, 5000);
 					} else {
 						longPoll();
@@ -1762,6 +1766,10 @@ function dc_gi_ajax_poll_start(): void {
 		wp_send_json_error( 'Forbidden', 403 );
 	}
 	dc_gi_set_poll_active( true );
+	// Clear the inspect throttle so the very first poll_wait request immediately
+	// kicks off an inspect batch — ensures the cache starts building without
+	// waiting for the throttle to expire from a previous session.
+	delete_transient( 'dc_gi_inspect_poll_throttle' );
 	// Ensure the recurring poll cron is scheduled so polling continues without the browser.
 	if ( ! wp_next_scheduled( DC_GI_POLL_HOOK ) ) {
 		wp_schedule_event( time(), 'dc_gi_every1', DC_GI_POLL_HOOK );
@@ -1838,11 +1846,22 @@ function dc_gi_ajax_poll_wait(): void {
 	// When the inspection cache is empty the poll batch cannot proceed.
 	// Drive the inspect batch directly — mirrors how the poll batch is driven
 	// above so the interactive long-poll session works without relying on cron.
+	// A 60-second throttle prevents the 5-second browser retry loop from
+	// hammering the URL Inspection API and burning through its daily quota.
+	// add_transient() performs an atomic check-and-set (returns false when the
+	// throttle key already exists), preventing concurrent requests from each
+	// triggering a separate inspect batch within the same throttle window.
 	if ( 'early:cache_empty' === $batch_status ) {
-		dc_gi_run_inspect_batch();
+		if ( add_transient( 'dc_gi_inspect_poll_throttle', 1, MINUTE_IN_SECONDS ) ) {
+			$inspect_status = dc_gi_run_inspect_batch();
+			// Surface a more specific status so the browser can adjust its retry delay.
+			if ( in_array( $inspect_status, [ 'early:quota_backoff', 'early:no_sa', 'early:no_urls' ], true ) ) {
+				$batch_status = $inspect_status;
+			}
+		}
 		// If the inspect batch added entries, signal an immediate retry instead
 		// of the 5-second back-off so the poll cycle can begin right away.
-		if ( DC_GI_URL_Cache::count_total() > 0 ) {
+		if ( 'early:cache_empty' === $batch_status && DC_GI_URL_Cache::count_total() > 0 ) {
 			$batch_status = 'ok:inspect_ran';
 		}
 	}
