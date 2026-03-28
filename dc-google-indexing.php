@@ -492,6 +492,12 @@ function dc_gi_run_watchlist_check(): void {
 	// still update coverage states so the watchlist stays current.
 	$quota_ok = ! dc_gi_is_quota_exhausted();
 
+	// When the Inspection API daily quota (2,000/day) is exhausted, skip the
+	// entire inspection run — coverage states cannot be updated without API access.
+	if ( dc_gi_is_inspect_quota_exhausted() ) {
+		return;
+	}
+
 	$site_url     = trailingslashit( get_home_url() );
 	$list         = get_option( 'dc_gi_watchlist', [] );
 	$updated      = false;
@@ -526,15 +532,24 @@ function dc_gi_run_watchlist_check(): void {
 			break; // Quota-safe batch limit per run.
 		}
 
-		$result                     = DC_GI_JWT::inspect_url( $sa, $list[ $k ]['url'], $site_url );
-		$list[ $k ]['last_checked'] = time();
-		++$checked;
-		$updated = true;
+		$result = DC_GI_JWT::inspect_url( $sa, $list[ $k ]['url'], $site_url );
 
 		if ( is_wp_error( $result ) ) {
+			if ( 'dc_gi_inspect_quota_exceeded' === $result->get_error_code() ) {
+				// Quota hit mid-batch — don't record last_checked so the URL retries next run.
+				break;
+			}
+			$list[ $k ]['last_checked'] = time();
+			++$checked;
+			$updated                = true;
 			$list[ $k ]['coverage'] = 'error: ' . $result->get_error_message();
 			continue;
 		}
+
+		dc_gi_increment_inspect_quota();
+		$list[ $k ]['last_checked'] = time();
+		++$checked;
+		$updated = true;
 
 		$coverage               = $result['inspectionResult']['indexStatusResult']['coverageState'] ?? '';
 		$list[ $k ]['coverage'] = $coverage;
@@ -1058,15 +1073,27 @@ function dc_gi_run_watch_check_one_cron(): void {
 	$key   = $keys[ $offset ];
 	$entry = &$list[ $key ];
 
-	$result                = DC_GI_JWT::inspect_url( $sa, $entry['url'], $site_url );
-	$entry['last_checked'] = time();
+	// Stop if the Inspection API daily quota (2,000/day) is gone — don't store an
+	// error entry; the cron will retry this URL when the quota resets tomorrow.
+	if ( dc_gi_is_inspect_quota_exhausted() ) {
+		return;
+	}
+
+	$result = DC_GI_JWT::inspect_url( $sa, $entry['url'], $site_url );
 
 	if ( is_wp_error( $result ) ) {
-		$entry['coverage'] = 'error: ' . $result->get_error_message();
-		$entry['status']   = 'error';
+		if ( 'dc_gi_inspect_quota_exceeded' === $result->get_error_code() ) {
+			// Quota hit — don't record last_checked or advance offset.
+			return;
+		}
+		$entry['last_checked'] = time();
+		$entry['coverage']     = 'error: ' . $result->get_error_message();
+		$entry['status']       = 'error';
 	} else {
-		$coverage          = $result['inspectionResult']['indexStatusResult']['coverageState'] ?? '';
-		$entry['coverage'] = $coverage;
+		dc_gi_increment_inspect_quota();
+		$entry['last_checked'] = time();
+		$coverage              = $result['inspectionResult']['indexStatusResult']['coverageState'] ?? '';
+		$entry['coverage']     = $coverage;
 
 		$resubmit_states = [
 			'Crawled - currently not indexed',

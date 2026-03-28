@@ -660,6 +660,10 @@ function dc_gi_watch_check_js(): string {
 						$('#dc-gi-wcp-label').text('\u2705 Done \u2014 ' + d.checked + ' URLs checked.');
 						$('#dc-gi-wcp-bar').css('background','#00f2c3');
 						setBadgeDone();
+					} else if (d.inspect_quota_exhausted) {
+						$('#dc-gi-wcp-label').text('\u26a0\ufe0f Inspection quota exhausted \u2014 will resume tomorrow.');
+						setBadgeStopped();
+						$.post(dcGiPoll.ajaxurl, { action: 'dc_gi_watch_stop', nonce: dcGiPoll.nonce });
 					} else {
 						wcCheckOne(d.next);
 					}
@@ -1362,15 +1366,44 @@ function dc_gi_ajax_watch_check_one(): void {
 	$entry     = &$list[ $key ];
 	$entry_url = $entry['url'];
 
+	// The Inspection API has its own 2,000/day quota, separate from the submission quota.
+	// Stop early rather than storing an error entry that would pollute the watchlist.
+	if ( dc_gi_is_inspect_quota_exhausted() ) {
+		wp_send_json_success(
+			[
+				'done'                    => false,
+				'inspect_quota_exhausted' => true,
+				'checked'                 => $offset,
+				'total'                   => $total,
+				'next'                    => $offset,
+				'queue_count'             => count( (array) get_option( 'dc_gi_queue', [] ) ),
+			]
+		);
+	}
+
 	$result                = DC_GI_JWT::inspect_url( $sa, $entry_url, $site_url );
 	$entry['last_checked'] = time();
 
 	$auto_removed = false;
 
 	if ( is_wp_error( $result ) ) {
+		if ( 'dc_gi_inspect_quota_exceeded' === $result->get_error_code() ) {
+			// Quota hit mid-check — don't persist an error entry; tell JS to stop.
+			wp_send_json_success(
+				[
+					'done'                    => false,
+					'inspect_quota_exhausted' => true,
+					'checked'                 => $offset,
+					'total'                   => $total,
+					'next'                    => $offset,
+					'queue_count'             => count( (array) get_option( 'dc_gi_queue', [] ) ),
+				]
+			);
+		}
 		$entry['coverage'] = 'error: ' . $result->get_error_message();
 		$entry['status']   = 'error';
 	} else {
+		dc_gi_increment_inspect_quota();
 		$coverage          = $result['inspectionResult']['indexStatusResult']['coverageState'] ?? '';
 		$entry['coverage'] = $coverage;
 

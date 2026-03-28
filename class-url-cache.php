@@ -108,7 +108,8 @@ class DC_GI_URL_Cache {
 			$max_age_s = DC_GI_CACHE_TTL;
 		}
 
-		$cutoff = gmdate( 'Y-m-d H:i:s', time() - $max_age_s );
+		$cutoff   = gmdate( 'Y-m-d H:i:s', time() - $max_age_s );
+		$not_like = $wpdb->esc_like( 'inspect_error:' ) . '%';
 
 		// Build NOT IN clause safely.
 		if ( ! empty( $skip_urls ) ) {
@@ -120,10 +121,11 @@ class DC_GI_URL_Cache {
 					"SELECT url FROM `{$wpdb->prefix}dc_gi_url_cache`
 				  WHERE index_verdict IN ('NEUTRAL','VERDICT_UNSPECIFIED')
 				    AND last_inspected >= %s
+				    AND coverage_state NOT LIKE %s
 				    AND url NOT IN ({$placeholders})
 				  ORDER BY last_inspected ASC
 				  LIMIT %d",
-					array_merge( [ $cutoff ], $skip_urls, [ $limit ] )
+					array_merge( [ $cutoff, $not_like ], $skip_urls, [ $limit ] )
 				)
 				// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber
 			);
@@ -134,9 +136,11 @@ class DC_GI_URL_Cache {
 					"SELECT url FROM `{$wpdb->prefix}dc_gi_url_cache`
 				  WHERE index_verdict IN ('NEUTRAL','VERDICT_UNSPECIFIED')
 				    AND last_inspected >= %s
+				    AND coverage_state NOT LIKE %s
 				  ORDER BY last_inspected ASC
 				  LIMIT %d",
 					$cutoff,
+					$not_like,
 					$limit
 				)
 			);
@@ -293,7 +297,8 @@ class DC_GI_URL_Cache {
 			return [];
 		}
 
-		$cutoff = gmdate( 'Y-m-d H:i:s', time() - DC_GI_CACHE_TTL );
+		$cutoff   = gmdate( 'Y-m-d H:i:s', time() - DC_GI_CACHE_TTL );
+		$not_like = $wpdb->esc_like( 'inspect_error:' ) . '%';
 
 		// Fetch already-fresh URLs in one query so we can subtract them locally.
 		$placeholders = implode( ',', array_fill( 0, count( $all_sitemap_urls ), '%s' ) );
@@ -303,8 +308,9 @@ class DC_GI_URL_Cache {
 			$wpdb->prepare(
 				"SELECT url FROM `{$wpdb->prefix}dc_gi_url_cache`
 			  WHERE url IN ({$placeholders})
-			    AND last_inspected >= %s",
-				array_merge( $all_sitemap_urls, [ $cutoff ] )
+			    AND last_inspected >= %s
+			    AND coverage_state NOT LIKE %s",
+				array_merge( $all_sitemap_urls, [ $cutoff, $not_like ] )
 			)
 			// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber
 		);
