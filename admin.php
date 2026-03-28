@@ -80,6 +80,7 @@ add_action( 'admin_post_dc_gi_qa_clear', 'dc_gi_handle_qa_clear' );
 add_action( 'wp_ajax_dc_gi_index_status', 'dc_gi_ajax_index_status' );
 add_action( 'wp_ajax_dc_gi_is_urls', 'dc_gi_ajax_is_urls' );
 add_action( 'wp_ajax_dc_gi_quota_metrics', 'dc_gi_ajax_quota_metrics' );
+add_action( 'wp_ajax_dc_gi_fetch_analytics', 'dc_gi_ajax_fetch_analytics' );
 add_action( 'admin_enqueue_scripts', 'dc_gi_enqueue_scripts' );
 /**
  * Enqueue admin scripts and localized data for the plugin's admin page.
@@ -1111,6 +1112,7 @@ function dc_gi_handle_save(): void {
 			'auto_delete'             => ! empty( $_POST['auto_delete'] ) ? 1 : 0,
 			'post_types'              => $post_types,
 			'daily_quota'             => min( 200, max( 1, absint( isset( $_POST['daily_quota'] ) ? wp_unslash( $_POST['daily_quota'] ) : 200 ) ) ),
+			'analytics_days'          => min( 90, max( 1, absint( isset( $_POST['analytics_days'] ) ? wp_unslash( $_POST['analytics_days'] ) : 28 ) ) ),
 		]
 	);
 
@@ -2446,6 +2448,60 @@ function dc_gi_ajax_quota_metrics(): void {
 }
 
 /**
+ * AJAX: Fetch Search Analytics data for the given date range and store in the URL cache.
+ *
+ * Accepts an optional $_POST['days'] (7, 28, or 90) to override the saved setting.
+ *
+ * @return void
+ */
+function dc_gi_ajax_fetch_analytics(): void {
+	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_send_json_error( 'Forbidden', 403 );
+	}
+
+	$settings = dc_gi_get_settings();
+	if ( empty( $settings['service_account_json'] ) ) {
+		wp_send_json_error( __( 'No service account configured.', 'dc-google-indexing' ) );
+	}
+	$sa = json_decode( wp_unslash( $settings['service_account_json'] ), true );
+	if ( ! is_array( $sa ) || empty( $sa['client_email'] ) || empty( $sa['private_key'] ) ) {
+		wp_send_json_error( __( 'Invalid service account JSON.', 'dc-google-indexing' ) );
+	}
+
+	$allowed_days = [ 7, 28, 90 ];
+	$days_raw     = isset( $_POST['days'] ) ? (int) wp_unslash( $_POST['days'] ) : 0;
+	$days         = in_array( $days_raw, $allowed_days, true )
+		? $days_raw
+		: max( 1, (int) ( $settings['analytics_days'] ?? 28 ) );
+
+	$site_url = dc_gi_get_search_console_property( $settings );
+	$result   = DC_GI_URL_Cache::run_analytics_batch( $sa, $site_url, $days );
+
+	if ( 0 === strpos( $result, 'error:' ) ) {
+		wp_send_json_success(
+			[
+				'ok'           => false,
+				'message'      => substr( $result, 6 ),
+				'updated'      => 0,
+				'days'         => $days,
+				'last_updated' => null,
+			]
+		);
+	}
+
+	$updated = (int) substr( $result, 3 ); // 'ok:N'
+
+	wp_send_json_success(
+		[
+			'ok'           => true,
+			'updated'      => $updated,
+			'days'         => $days,
+			'last_updated' => DC_GI_URL_Cache::get_analytics_last_updated(),
+		]
+	);
+}
+/**
  * Handle the reset-poll-cycle form action.
  */
 function dc_gi_handle_poll_reset(): void {
@@ -2503,13 +2559,13 @@ function dc_gi_handle_cache_clear(): void {
 	exit;
 }
 
-// =============================================================================
-// RENDER PAGE
-// =============================================================================
+	// =============================================================================
+	// RENDER PAGE
+	// =============================================================================
 
-/**
- * Render the plugin's admin page (all tabs).
- */
+	/**
+	 * Render the plugin's admin page (all tabs).
+	 */
 function dc_gi_render_page(): void {
 	if ( ! current_user_can( 'manage_options' ) ) {
 		return;
@@ -2604,7 +2660,7 @@ function dc_gi_render_page(): void {
 	<div class="wrap dc-gi-admin">
 		<h1 class="dc-gi-page-title">
 			<span class="dashicons dashicons-search"></span>
-			<?php esc_html_e( 'DC Google Indexing', 'dc-google-indexing' ); ?>
+		<?php esc_html_e( 'DC Google Indexing', 'dc-google-indexing' ); ?>
 		</h1>
 
 		<?php if ( $notice_key && isset( $notices[ $notice_key ] ) ) : ?>
@@ -2615,7 +2671,7 @@ function dc_gi_render_page(): void {
 
 		<!-- Status bar -->
 		<div class="dc-gi-statusbar">
-			<?php if ( $has_sa ) : ?>
+		<?php if ( $has_sa ) : ?>
 				<span class="dc-gi-statusbar-chip">
 					<span><?php esc_html_e( 'Service account', 'dc-google-indexing' ); ?></span>
 					<span class="dc-gi-chip-val ok"><code><?php echo esc_html( $sa_email ); ?></code></span>
@@ -2641,35 +2697,35 @@ function dc_gi_render_page(): void {
 
 		<!-- Tabs -->
 		<nav class="nav-tab-wrapper">
-			<?php
-			$tabs = [
-				'start'        => __( '🚀 Getting Started', 'dc-google-indexing' ),
-				'settings'     => __( 'Settings', 'dc-google-indexing' ),
-				'submit'       => __( 'Submit URLs', 'dc-google-indexing' ),
-				'queue'        => __( 'Queue', 'dc-google-indexing' ),
-				'watchlist'    => __( '👁 Watchlist', 'dc-google-indexing' ),
-				'polling'      => __( '📡 Polling', 'dc-google-indexing' ),
-				'log'          => __( 'Log', 'dc-google-indexing' ),
-				'qa'           => __( '🔍 Quality Assurance', 'dc-google-indexing' ),
-				'index_status' => __( '📊 Index Status', 'dc-google-indexing' ),
-			];
-			foreach ( $tabs as $t => $label ) {
-				printf(
-					'<a href="%s" class="nav-tab %s">%s</a>',
-					esc_url(
-						add_query_arg(
-							[
-								'page' => 'dc-google-indexing',
-								'tab'  => $t,
-							],
-							admin_url( 'admin.php' )
-						)
-					),
-					$tab === $t ? 'nav-tab-active' : '',
-					esc_html( $label )
-				);
-			}
-			?>
+		<?php
+		$tabs = [
+			'start'        => __( '🚀 Getting Started', 'dc-google-indexing' ),
+			'settings'     => __( 'Settings', 'dc-google-indexing' ),
+			'submit'       => __( 'Submit URLs', 'dc-google-indexing' ),
+			'queue'        => __( 'Queue', 'dc-google-indexing' ),
+			'watchlist'    => __( '👁 Watchlist', 'dc-google-indexing' ),
+			'polling'      => __( '📡 Polling', 'dc-google-indexing' ),
+			'log'          => __( 'Log', 'dc-google-indexing' ),
+			'qa'           => __( '🔍 Quality Assurance', 'dc-google-indexing' ),
+			'index_status' => __( '📊 Index Status', 'dc-google-indexing' ),
+		];
+		foreach ( $tabs as $t => $label ) {
+			printf(
+				'<a href="%s" class="nav-tab %s">%s</a>',
+				esc_url(
+					add_query_arg(
+						[
+							'page' => 'dc-google-indexing',
+							'tab'  => $t,
+						],
+						admin_url( 'admin.php' )
+					)
+				),
+				$tab === $t ? 'nav-tab-active' : '',
+				esc_html( $label )
+			);
+		}
+		?>
 		</nav>
 
 		<div class="dc-gi-panel">
@@ -2726,35 +2782,35 @@ function dc_gi_render_page(): void {
 
 		<h2><?php esc_html_e( 'Getting Started — Connect Google Indexing API', 'dc-google-indexing' ); ?></h2>
 		<p class="dc-gi-intro">
-			<?php esc_html_e( 'This guide walks you through connecting your WordPress site to Google\'s Web Search Indexing API. Once set up, Google is notified within seconds every time you publish or update content — no more waiting days for Googlebot to find your pages.', 'dc-google-indexing' ); ?>
+				<?php esc_html_e( 'This guide walks you through connecting your WordPress site to Google\'s Web Search Indexing API. Once set up, Google is notified within seconds every time you publish or update content — no more waiting days for Googlebot to find your pages.', 'dc-google-indexing' ); ?>
 			<br><strong><?php esc_html_e( 'Estimated time: 10–15 minutes. No coding required.', 'dc-google-indexing' ); ?></strong>
 		</p>
 
 		<!-- Progress bar -->
-			<?php
-			$property_connected = ! empty( $connection_test['property_access']['ok'] );
-			$step_done          = [ false, false, false, false, false ];
-			if ( $has_sa ) {
-				$step_done = [ true, true, true, $property_connected, $property_connected ];
-			}
-			$step_labels = [
-				__( 'Cloud Project', 'dc-google-indexing' ),
-				__( 'Enable API', 'dc-google-indexing' ),
-				__( 'Service Account', 'dc-google-indexing' ),
-				__( 'Search Console', 'dc-google-indexing' ),
-				__( 'Connect', 'dc-google-indexing' ),
-			];
-			?>
-		<div class="dc-gi-progress">
-			<?php
-			foreach ( $step_labels as $i => $slabel ) :
-				$class = $step_done[ $i ] ? 'done' : ( ! $has_sa && 0 === $i ? 'active' : '' );
+				<?php
+				$property_connected = ! empty( $connection_test['property_access']['ok'] );
+				$step_done          = [ false, false, false, false, false ];
+				if ( $has_sa ) {
+					$step_done = [ true, true, true, $property_connected, $property_connected ];
+				}
+				$step_labels = [
+					__( 'Cloud Project', 'dc-google-indexing' ),
+					__( 'Enable API', 'dc-google-indexing' ),
+					__( 'Service Account', 'dc-google-indexing' ),
+					__( 'Search Console', 'dc-google-indexing' ),
+					__( 'Connect', 'dc-google-indexing' ),
+				];
 				?>
+		<div class="dc-gi-progress">
+				<?php
+				foreach ( $step_labels as $i => $slabel ) :
+					$class = $step_done[ $i ] ? 'done' : ( ! $has_sa && 0 === $i ? 'active' : '' );
+					?>
 			<div class="dc-gi-progress-step <?php echo esc_attr( $class ); ?>">
 				<div class="dc-gi-progress-dot"><?php echo $step_done[ $i ] ? '✓' : esc_html( (string) ( $i + 1 ) ); ?></div>
 				<div class="dc-gi-progress-label"><?php echo esc_html( $slabel ); ?></div>
 			</div>
-			<?php endforeach; ?>
+				<?php endforeach; ?>
 		</div>
 
 		<!-- ── STEP 1 ── -->
@@ -3232,6 +3288,30 @@ function dc_gi_render_page(): void {
 							min="1" max="200" class="small-text">
 						<p class="description">
 							<?php esc_html_e( 'Maximum submissions per day. Google default is 200 — request a quota increase in Cloud Console if needed.', 'dc-google-indexing' ); ?>
+						</p>
+					</td>
+				</tr>
+				<tr>
+					<th scope="row">
+						<label for="analytics_days"><?php esc_html_e( 'Analytics Date Range (days)', 'dc-google-indexing' ); ?></label>
+					</th>
+					<td>
+						<select id="analytics_days" name="analytics_days">
+							<?php
+							$saved_days = (int) ( $settings['analytics_days'] ?? 28 );
+							foreach ( [ 7, 28, 90 ] as $opt ) {
+								printf(
+									'<option value="%1$d"%2$s>%3$s</option>',
+									(int) $opt,
+									selected( $saved_days, $opt, false ),
+									/* translators: %d: number of days for analytics date range */
+									esc_html( sprintf( __( 'Last %d days', 'dc-google-indexing' ), $opt ) )
+								);
+							}
+							?>
+						</select>
+						<p class="description">
+							<?php esc_html_e( 'Date range used when the background cron fetches Search Analytics data. This also sets the default range on the Index Status page.', 'dc-google-indexing' ); ?>
 						</p>
 					</td>
 				</tr>
@@ -4369,6 +4449,50 @@ function dc_gi_render_page(): void {
 			</div>
 		</div><!-- /.stat cards -->
 
+		<!-- Search Analytics panel -->
+			<?php
+			$is_analytics_last = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::get_analytics_last_updated() : null;
+			$is_analytics_days = max( 1, (int) ( $settings['analytics_days'] ?? 28 ) );
+			?>
+		<div class="dc-gi-live-panel" style="max-width:740px;padding:18px 22px;margin-bottom:24px">
+			<h3 style="margin:0 0 12px;font-size:14px;color:#c8d0e0"><?php esc_html_e( 'Search Analytics', 'dc-google-indexing' ); ?></h3>
+			<p style="font-size:13px;color:#8892a4;margin:0 0 14px">
+				<?php esc_html_e( 'Fetch clicks, impressions, CTR, and position from the Google Search Console Search Analytics API. Results are stored per URL and shown in the detail rows below.', 'dc-google-indexing' ); ?>
+			</p>
+			<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+				<label for="dc-gi-analytics-days" style="font-size:13px;color:#c8d0e0"><?php esc_html_e( 'Date range:', 'dc-google-indexing' ); ?></label>
+				<select id="dc-gi-analytics-days" style="background:#252a45;border:1px solid #2d3555;color:#c8d0e0;border-radius:4px;padding:4px 8px;font-size:13px">
+					<?php foreach ( [ 7, 28, 90 ] as $opt ) : ?>
+					<option value="<?php echo esc_attr( (string) $opt ); ?>"<?php echo selected( $is_analytics_days, $opt, false ); ?>>
+						<?php
+						printf(
+							/* translators: %d: number of days */
+							esc_html__( 'Last %d days', 'dc-google-indexing' ),
+							(int) $opt
+						);
+						?>
+					</option>
+					<?php endforeach; ?>
+				</select>
+				<button id="dc-gi-analytics-fetch-btn" class="button dc-gi-btn-start" style="padding:5px 16px!important">
+					<?php esc_html_e( '↻ Fetch Analytics', 'dc-google-indexing' ); ?>
+				</button>
+				<span id="dc-gi-analytics-status" style="font-size:12px;color:#7a8499">
+					<?php
+					if ( $is_analytics_last ) {
+						printf(
+							/* translators: %s: UTC datetime of last analytics fetch */
+							esc_html__( 'Last fetched: %s UTC', 'dc-google-indexing' ),
+							esc_html( $is_analytics_last )
+						);
+					} else {
+						esc_html_e( 'No analytics data yet.', 'dc-google-indexing' );
+					}
+					?>
+				</span>
+			</div>
+		</div><!-- /.analytics panel -->
+
 			<?php if ( $is_total > 0 ) : ?>
 		<!-- Two-column: coverage bars + verdict donut -->
 		<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;max-width:940px;margin-bottom:28px">
@@ -4717,6 +4841,25 @@ function dc_gi_render_page(): void {
 				if ( row.last_submitted && '0000-00-00 00:00:00' !== row.last_submitted ) {
 					html += '<div><span style="color:#7a8499"><?php echo esc_js( __( 'Last submitted', 'dc-google-indexing' ) ); ?>:</span> <span style="color:#c8d0e0">' + esc(fmtDate(row.last_submitted)) + '</span></div>';
 				}
+
+				// Search Analytics data.
+				if ( row.sa_updated ) {
+					var ctr      = row.sa_ctr      != null ? ( parseFloat( row.sa_ctr )      * 100 ).toFixed( 1 ) + '%' : '—';
+					var pos      = row.sa_position != null ? parseFloat( row.sa_position ).toFixed( 1 )                 : '—';
+					var clicks   = row.sa_clicks   != null ? parseInt( row.sa_clicks, 10 )                              : '—';
+					var impr     = row.sa_impressions != null ? parseInt( row.sa_impressions, 10 )                      : '—';
+					html += '<div style="grid-column:1/-1;margin-top:4px;padding-top:8px;border-top:1px solid rgba(45,53,85,.6)">'
+						+ '<span style="color:#7a8499;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px"><?php echo esc_js( __( 'Search Analytics', 'dc-google-indexing' ) ); ?></span>'
+						+ '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px">'
+						+ '<div style="background:rgba(255,255,255,.04);border-radius:5px;padding:8px 10px;text-align:center"><div style="font-size:18px;font-weight:700;color:#1d8cf8">' + esc(String(clicks)) + '</div><div style="font-size:10px;color:#7a8499;margin-top:3px;text-transform:uppercase"><?php echo esc_js( __( 'Clicks', 'dc-google-indexing' ) ); ?></div></div>'
+						+ '<div style="background:rgba(255,255,255,.04);border-radius:5px;padding:8px 10px;text-align:center"><div style="font-size:18px;font-weight:700;color:#c8d0e0">' + esc(String(impr)) + '</div><div style="font-size:10px;color:#7a8499;margin-top:3px;text-transform:uppercase"><?php echo esc_js( __( 'Impressions', 'dc-google-indexing' ) ); ?></div></div>'
+						+ '<div style="background:rgba(255,255,255,.04);border-radius:5px;padding:8px 10px;text-align:center"><div style="font-size:18px;font-weight:700;color:#00f2c3">' + esc(ctr) + '</div><div style="font-size:10px;color:#7a8499;margin-top:3px;text-transform:uppercase"><?php echo esc_js( __( 'CTR', 'dc-google-indexing' ) ); ?></div></div>'
+						+ '<div style="background:rgba(255,255,255,.04);border-radius:5px;padding:8px 10px;text-align:center"><div style="font-size:18px;font-weight:700;color:#ff8d72">' + esc(pos) + '</div><div style="font-size:10px;color:#7a8499;margin-top:3px;text-transform:uppercase"><?php echo esc_js( __( 'Avg. Position', 'dc-google-indexing' ) ); ?></div></div>'
+						+ '</div>'
+						+ '<div style="font-size:10px;color:#7a8499;margin-top:6px"><?php echo esc_js( __( 'Updated:', 'dc-google-indexing' ) ); ?> ' + esc( row.sa_updated ) + ' UTC</div>'
+						+ '</div>';
+				}
+
 				if ( rr ) {
 					html += '<div style="grid-column:1/-1"><span style="color:#7a8499;font-weight:600"><?php echo esc_js( __( 'Rich Results', 'dc-google-indexing' ) ); ?></span>' + rr + '</div>';
 				}
@@ -4875,6 +5018,43 @@ function dc_gi_render_page(): void {
 				} );
 			} );
 
+			// ── Search Analytics fetch button ────────────────────────────────────
+
+			var $analyticsBtn = document.getElementById( 'dc-gi-analytics-fetch-btn' );
+			if ( $analyticsBtn ) {
+				$analyticsBtn.addEventListener( 'click', function () {
+					var days   = parseInt( document.getElementById( 'dc-gi-analytics-days' ).value, 10 ) || <?php echo (int) $is_analytics_days; ?>;
+					var status = document.getElementById( 'dc-gi-analytics-status' );
+					$analyticsBtn.disabled = true;
+					$analyticsBtn.textContent = '<?php echo esc_js( __( 'Fetching…', 'dc-google-indexing' ) ); ?>';
+					if ( status ) { status.textContent = '<?php echo esc_js( __( 'Fetching…', 'dc-google-indexing' ) ); ?>'; }
+					jQuery.post( ajaxUrl, { action: 'dc_gi_fetch_analytics', nonce: nonce, days: days }, function ( r ) {
+						$analyticsBtn.disabled = false;
+						$analyticsBtn.textContent = '<?php echo esc_js( __( '↻ Fetch Analytics', 'dc-google-indexing' ) ); ?>';
+						if ( ! r || ! r.success ) {
+							if ( status ) { status.textContent = '<?php echo esc_js( __( 'Error fetching analytics.', 'dc-google-indexing' ) ); ?>'; }
+							return;
+						}
+						var d = r.data;
+						if ( status ) {
+							if ( d.ok && d.last_updated ) {
+								status.textContent = '<?php echo esc_js( __( 'Last fetched:', 'dc-google-indexing' ) ); ?> ' + d.last_updated + ' UTC (' + d.updated + ' <?php echo esc_js( __( 'rows updated', 'dc-google-indexing' ) ); ?>)';
+							} else if ( d.ok ) {
+								status.textContent = '<?php echo esc_js( __( 'Fetch complete.', 'dc-google-indexing' ) ); ?> ' + d.updated + ' <?php echo esc_js( __( 'rows updated', 'dc-google-indexing' ) ); ?>.';
+							} else {
+								status.textContent = '<?php echo esc_js( __( 'Warning:', 'dc-google-indexing' ) ); ?> ' + ( d.message || '<?php echo esc_js( __( 'No data returned.', 'dc-google-indexing' ) ); ?>' );
+							}
+						}
+						// Reload the URL table to show fresh analytics data.
+						loadUrlTable( isPage, isFilter, null, null );
+					} ).fail( function () {
+						$analyticsBtn.disabled = false;
+						$analyticsBtn.textContent = '<?php echo esc_js( __( '↻ Fetch Analytics', 'dc-google-indexing' ) ); ?>';
+						if ( status ) { status.textContent = '<?php echo esc_js( __( 'Request failed.', 'dc-google-indexing' ) ); ?>'; }
+					} );
+				} );
+			}
+
 			// Initial load — sort by Last Crawl descending.
 			loadUrlTable( 1, '', 'last_crawl_time', 'DESC' );
 		}());
@@ -4885,5 +5065,5 @@ function dc_gi_render_page(): void {
 
 		</div><!-- tab content -->
 	</div><!-- .wrap -->
-	<?php
+		<?php
 }

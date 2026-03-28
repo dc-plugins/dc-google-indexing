@@ -11,12 +11,17 @@
  *
  * Table: {wpdb->prefix}dc_gi_url_cache
  * Columns:
- *   url           VARCHAR(600)  PK
- *   index_verdict VARCHAR(30)   PASS | FAIL | NEUTRAL | VERDICT_UNSPECIFIED
- *   coverage_state TEXT
+ *   url              VARCHAR(600)  PK
+ *   index_verdict    VARCHAR(30)   PASS | FAIL | NEUTRAL | VERDICT_UNSPECIFIED
+ *   coverage_state   TEXT
  *   page_fetch_state VARCHAR(60)
- *   last_inspected DATETIME     UTC
- *   last_submitted DATETIME NULL UTC
+ *   last_inspected   DATETIME      UTC
+ *   last_submitted   DATETIME NULL UTC
+ *   sa_clicks        INT           Search Analytics clicks
+ *   sa_impressions   INT           Search Analytics impressions
+ *   sa_ctr           FLOAT         Search Analytics click-through rate (0–1)
+ *   sa_position      FLOAT         Search Analytics average position
+ *   sa_updated       DATETIME NULL UTC — when analytics were last fetched
  *
  * @package DC_Google_Indexing
  * @since   1.1.0
@@ -79,6 +84,11 @@ class DC_GI_URL_Cache {
 			rich_results     TEXT          NOT NULL,
 			last_inspected   DATETIME      NOT NULL,
 			last_submitted   DATETIME      NULL DEFAULT NULL,
+			sa_clicks        INT           NOT NULL DEFAULT 0,
+			sa_impressions   INT           NOT NULL DEFAULT 0,
+			sa_ctr           FLOAT         NOT NULL DEFAULT 0,
+			sa_position      FLOAT         NOT NULL DEFAULT 0,
+			sa_updated       DATETIME      NULL DEFAULT NULL,
 			PRIMARY KEY (url(600))
 		) {$charset_collate};";
 
@@ -108,6 +118,11 @@ class DC_GI_URL_Cache {
 			'user_canonical'   => "VARCHAR(600) NOT NULL DEFAULT ''",
 			'crawled_as'       => "VARCHAR(20) NOT NULL DEFAULT ''",
 			'rich_results'     => 'TEXT NOT NULL',
+			'sa_clicks'        => 'INT NOT NULL DEFAULT 0',
+			'sa_impressions'   => 'INT NOT NULL DEFAULT 0',
+			'sa_ctr'           => 'FLOAT NOT NULL DEFAULT 0',
+			'sa_position'      => 'FLOAT NOT NULL DEFAULT 0',
+			'sa_updated'       => 'DATETIME NULL DEFAULT NULL',
 		];
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
@@ -285,7 +300,8 @@ class DC_GI_URL_Cache {
 				"SELECT url, index_verdict, coverage_state, page_fetch_state,
 				        robots_txt_state, indexing_state, last_crawl_time,
 				        google_canonical, user_canonical, crawled_as, rich_results,
-				        last_inspected, last_submitted
+				        last_inspected, last_submitted,
+				        sa_clicks, sa_impressions, sa_ctr, sa_position, sa_updated
 				 FROM `{$wpdb->prefix}dc_gi_url_cache` WHERE url = %s LIMIT 1",
 				$url
 			),
@@ -368,6 +384,102 @@ class DC_GI_URL_Cache {
 			[ '%s' ],
 			[ '%s' ]
 		);
+	}
+
+	/**
+	 * Update the Search Analytics columns for an existing cached URL.
+	 *
+	 * Only updates rows that are already in the cache — does not insert new rows.
+	 * Called by run_analytics_batch() after fetching data from the Search Analytics API.
+	 *
+	 * @param string $url    Fully qualified URL.
+	 * @param array  $fields Analytics data: sa_clicks, sa_impressions, sa_ctr, sa_position.
+	 */
+	public static function upsert_analytics( string $url, array $fields ): void {
+		global $wpdb;
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		$wpdb->update(
+			self::table(),
+			[
+				'sa_clicks'      => (int) ( $fields['sa_clicks'] ?? 0 ),
+				'sa_impressions' => (int) ( $fields['sa_impressions'] ?? 0 ),
+				'sa_ctr'         => (float) ( $fields['sa_ctr'] ?? 0.0 ),
+				'sa_position'    => (float) ( $fields['sa_position'] ?? 0.0 ),
+				'sa_updated'     => gmdate( 'Y-m-d H:i:s' ),
+			],
+			[ 'url' => $url ],
+			[ '%d', '%d', '%f', '%f', '%s' ],
+			[ '%s' ]
+		);
+	}
+
+	/**
+	 * Fetch Search Analytics data from the Google Search Console API and store it
+	 * in the URL cache table for all matching URLs.
+	 *
+	 * Paginates through the API (up to 25,000 rows per call) and upserts results
+	 * into the cache.  URLs in the analytics response that are not yet cached are
+	 * silently skipped — only rows already present are updated.
+	 *
+	 * @param array  $sa   Decoded service-account JSON credentials.
+	 * @param string $site_url Search Console property URL.
+	 * @param int    $days Number of days to look back (end date = today).
+	 * @return string 'ok:N' (N rows updated), or 'ok:0' (no data), or 'error:…'.
+	 */
+	public static function run_analytics_batch( array $sa, string $site_url, int $days = 28 ): string {
+		$end_date   = gmdate( 'Y-m-d' );
+		$start_date = gmdate( 'Y-m-d', time() - ( max( 1, $days ) - 1 ) * DAY_IN_SECONDS );
+
+		$start_row = 0;
+		$updated   = 0;
+
+		do {
+			$result = DC_GI_JWT::fetch_search_analytics( $sa, $site_url, $start_date, $end_date, $start_row );
+			if ( is_wp_error( $result ) ) {
+				return 'error:' . $result->get_error_message();
+			}
+
+			$rows = (array) ( $result['rows'] ?? [] );
+			if ( empty( $rows ) ) {
+				break;
+			}
+
+			foreach ( $rows as $row ) {
+				$url = (string) ( $row['keys'][0] ?? '' );
+				if ( ! $url ) {
+					continue;
+				}
+				self::upsert_analytics(
+					$url,
+					[
+						'sa_clicks'      => (int) round( (float) ( $row['clicks'] ?? 0 ) ),
+						'sa_impressions' => (int) round( (float) ( $row['impressions'] ?? 0 ) ),
+						'sa_ctr'         => (float) ( $row['ctr'] ?? 0.0 ),
+						'sa_position'    => (float) ( $row['position'] ?? 0.0 ),
+					]
+				);
+				++$updated;
+			}
+
+			$rows_count = count( $rows );
+			$start_row += $rows_count;
+		} while ( $rows_count >= 25000 );
+
+		return 'ok:' . $updated;
+	}
+
+	/**
+	 * Return the timestamp (UTC) of the most recent Search Analytics update across all rows,
+	 * or null when no analytics data has been fetched yet.
+	 *
+	 * @return string|null MySQL DATETIME string or null.
+	 */
+	public static function get_analytics_last_updated(): ?string {
+		global $wpdb;
+		$table = self::table();
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$val = $wpdb->get_var( "SELECT MAX(sa_updated) FROM {$table} WHERE sa_updated IS NOT NULL" );
+		return $val ? (string) $val : null;
 	}
 
 	/**
@@ -630,7 +742,8 @@ class DC_GI_URL_Cache {
 		$cols = 'url, index_verdict, coverage_state, page_fetch_state,
 		         robots_txt_state, indexing_state, last_crawl_time,
 		         google_canonical, user_canonical, crawled_as, rich_results,
-		         last_inspected, last_submitted';
+		         last_inspected, last_submitted,
+		         sa_clicks, sa_impressions, sa_ctr, sa_position, sa_updated';
 		if ( 'EXCLUDED' === $verdict_filter ) {
 			$sql  = "SELECT {$cols} FROM {$table} WHERE index_verdict IN ('NEUTRAL','VERDICT_UNSPECIFIED') ORDER BY {$order_by} {$order} LIMIT %d OFFSET %d"; // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 			$args = [ $per_page, $offset ];

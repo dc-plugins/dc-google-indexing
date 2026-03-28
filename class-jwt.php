@@ -283,6 +283,75 @@ class DC_GI_JWT {
 	}
 
 	/**
+	 * Fetch Search Analytics data for a site property from the Google Search Console API.
+	 *
+	 * Returns performance data (clicks, impressions, CTR, position) grouped by page URL.
+	 * Uses the webmasters.readonly scope — the same token as the URL Inspection API.
+	 *
+	 * Results are paginated: each call returns up to 25,000 rows.  Pass $start_row to
+	 * retrieve the next page when the previous response contained exactly 25,000 rows.
+	 *
+	 * @param  array  $sa         Decoded service account JSON.
+	 * @param  string $site_url   Search Console property URL (URL-prefix or sc-domain:).
+	 * @param  string $start_date Start date in Y-m-d format (inclusive).
+	 * @param  string $end_date   End date in Y-m-d format (inclusive).
+	 * @param  int    $start_row  Zero-based pagination offset.
+	 * @return array|WP_Error             API response array (with 'rows' key) or WP_Error.
+	 */
+	public static function fetch_search_analytics( array $sa, string $site_url, string $start_date, string $end_date, int $start_row = 0 ) {
+		$token = self::get_inspection_token( $sa );
+		if ( is_wp_error( $token ) ) {
+			return $token;
+		}
+
+		$api_url = 'https://www.googleapis.com/webmasters/v3/sites/'
+			. rawurlencode( $site_url )
+			. '/searchAnalytics/query';
+
+		$response = wp_remote_post(
+			$api_url,
+			[
+				'headers' => [
+					'Authorization' => 'Bearer ' . $token,
+					'Content-Type'  => 'application/json',
+				],
+				'body'    => (string) wp_json_encode(
+					[
+						'startDate'  => $start_date,
+						'endDate'    => $end_date,
+						'dimensions' => [ 'page' ],
+						'rowLimit'   => 25000,
+						'startRow'   => $start_row,
+					]
+				),
+				'timeout' => 30,
+			]
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+
+		$code = (int) wp_remote_retrieve_response_code( $response );
+		$body = json_decode( wp_remote_retrieve_body( $response ), true );
+
+		if ( 200 !== $code ) {
+			$msg = $body['error']['message']
+				?? sprintf(
+					/* translators: %d: HTTP response code from Search Analytics API */
+					__( 'Search Analytics API returned HTTP %d.', 'dc-google-indexing' ),
+					$code
+				);
+			if ( 401 === $code ) {
+				delete_transient( 'dc_gi_inspection_token' );
+			}
+			return new WP_Error( 'dc_gi_analytics_error', $msg, [ 'status' => $code ] );
+		}
+
+		return is_array( $body ) ? $body : [];
+	}
+
+	/**
 	 * Submit multiple URLs in a single HTTP batch request.
 	 *
 	 * Uses the Google multipart batch endpoint to reduce HTTP overhead when
