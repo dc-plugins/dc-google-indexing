@@ -1848,11 +1848,11 @@ function dc_gi_ajax_poll_wait(): void {
 	// above so the interactive long-poll session works without relying on cron.
 	// A 60-second throttle prevents the 5-second browser retry loop from
 	// hammering the URL Inspection API and burning through its daily quota.
-	// add_transient() performs an atomic check-and-set (returns false when the
-	// throttle key already exists), preventing concurrent requests from each
-	// triggering a separate inspect batch within the same throttle window.
+	// Check-then-set prevents concurrent requests from each triggering a
+	// separate inspect batch within the same throttle window.
 	if ( 'early:cache_empty' === $batch_status ) {
-		if ( add_transient( 'dc_gi_inspect_poll_throttle', 1, MINUTE_IN_SECONDS ) ) {
+		if ( ! get_transient( 'dc_gi_inspect_poll_throttle' ) ) {
+			set_transient( 'dc_gi_inspect_poll_throttle', 1, MINUTE_IN_SECONDS );
 			$inspect_status = dc_gi_run_inspect_batch();
 			// Surface a more specific status so the browser can adjust its retry delay.
 			if ( in_array( $inspect_status, [ 'early:quota_backoff', 'early:no_sa', 'early:no_urls' ], true ) ) {
