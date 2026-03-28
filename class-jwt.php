@@ -269,9 +269,13 @@ class DC_GI_JWT {
 			if ( 401 === $code ) {
 				delete_transient( 'dc_gi_inspection_token' );
 			}
-			// Use a dedicated WP_Error code for quota exhaustion so callers can
-			// abort the batch cleanly without writing a bad cache entry.
-			$error_code = ( 429 === $code ) ? 'dc_gi_inspect_quota_exceeded' : 'dc_gi_inspect_error';
+			// Quota exhaustion can arrive as HTTP 429 (rate-limited) OR HTTP 403 with
+			// RESOURCE_EXHAUSTED status (daily quota).  Detect both so callers can abort
+			// cleanly without writing a bad cache entry.
+			$is_quota   = ( 429 === $code )
+				|| ( 403 === $code && 'RESOURCE_EXHAUSTED' === ( $body['error']['status'] ?? '' ) )
+				|| ( false !== strpos( $msg, 'Quota exceeded' ) );
+			$error_code = $is_quota ? 'dc_gi_inspect_quota_exceeded' : 'dc_gi_inspect_error';
 			return new WP_Error( $error_code, $msg, [ 'status' => $code ] );
 		}
 

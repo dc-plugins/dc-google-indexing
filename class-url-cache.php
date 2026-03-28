@@ -155,9 +155,36 @@ class DC_GI_URL_Cache {
 	 */
 	public static function count_excluded(): int {
 		global $wpdb;
+		$not_like = $wpdb->esc_like( 'inspect_error:' ) . '%';
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
 		return (int) $wpdb->get_var(
-			"SELECT COUNT(*) FROM `{$wpdb->prefix}dc_gi_url_cache` WHERE index_verdict IN ('NEUTRAL','VERDICT_UNSPECIFIED')"
+			$wpdb->prepare(
+				"SELECT COUNT(*) FROM `{$wpdb->prefix}dc_gi_url_cache`
+				 WHERE index_verdict IN ('NEUTRAL','VERDICT_UNSPECIFIED')
+				   AND coverage_state NOT LIKE %s",
+				$not_like
+			)
+		);
+	}
+
+	/**
+	 * Count cache rows whose coverage_state is an internal inspection error string
+	 * (e.g. 'inspect_error: Quota exceeded …').
+	 *
+	 * These rows are excluded from submission and treated as stale so they are
+	 * re-inspected automatically on the next cron run.
+	 *
+	 * @return int
+	 */
+	public static function get_inspect_error_count(): int {
+		global $wpdb;
+		$like = $wpdb->esc_like( 'inspect_error:' ) . '%';
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+		return (int) $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT COUNT(*) FROM `{$wpdb->prefix}dc_gi_url_cache` WHERE coverage_state LIKE %s",
+				$like
+			)
 		);
 	}
 
@@ -464,9 +491,18 @@ class DC_GI_URL_Cache {
 	 */
 	public static function get_coverage_state_breakdown(): array {
 		global $wpdb;
-		$table = self::table();
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-		$rows   = $wpdb->get_results( "SELECT coverage_state, COUNT(*) AS cnt FROM {$table} GROUP BY coverage_state ORDER BY cnt DESC", ARRAY_A );
+		$table    = self::table();
+		$not_like = $wpdb->esc_like( 'inspect_error:' ) . '%';
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+		$rows = $wpdb->get_results(
+			// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+			$wpdb->prepare(
+				"SELECT coverage_state, COUNT(*) AS cnt FROM {$table} WHERE coverage_state NOT LIKE %s GROUP BY coverage_state ORDER BY cnt DESC",
+				$not_like
+			),
+			// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+			ARRAY_A
+		);
 		$result = [];
 		foreach ( (array) $rows as $row ) {
 			$result[] = [
