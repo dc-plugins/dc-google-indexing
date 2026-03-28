@@ -4309,15 +4309,9 @@ function dc_gi_render_page(): void {
 		<h2 style="margin-top:0"><?php esc_html_e( 'Index Status Overview', 'dc-google-indexing' ); ?></h2>
 		<p style="color:#8892a4;max-width:720px;font-size:13px;margin-bottom:20px"><?php esc_html_e( 'Live snapshot of all URLs in the inspection cache, grouped by coverage state and index verdict. The stat cards auto-refresh every 30 seconds.', 'dc-google-indexing' ); ?></p>
 
-			<?php if ( get_transient( 'dc_gi_inspect_quota_backoff' ) ) : ?>
-		<div class="dc-gi-callout warn" id="dc-gi-is-quota-backoff" style="max-width:700px;margin-bottom:18px">
-				<?php esc_html_e( 'URL Inspection API quota temporarily exhausted — background inspection is paused for up to 1 hour. The cache will resume building automatically once the quota window resets. Data shown below reflects what was cached before the quota was hit.', 'dc-google-indexing' ); ?>
-		</div>
-		<?php else : ?>
-		<div class="dc-gi-callout warn" id="dc-gi-is-quota-backoff" style="max-width:700px;margin-bottom:18px;display:none">
+		<div class="dc-gi-callout warn" id="dc-gi-is-quota-backoff" style="max-width:700px;margin-bottom:18px<?php echo get_transient( 'dc_gi_inspect_quota_backoff' ) ? '' : ';display:none'; ?>">
 			<?php esc_html_e( 'URL Inspection API quota temporarily exhausted — background inspection is paused for up to 1 hour. The cache will resume building automatically once the quota window resets. Data shown below reflects what was cached before the quota was hit.', 'dc-google-indexing' ); ?>
 		</div>
-		<?php endif; ?>
 
 			<?php
 			$is_counts   = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::get_verdict_counts() : [];
