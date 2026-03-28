@@ -3823,7 +3823,7 @@ function dc_gi_render_page(): void {
 			</div>
 
 			<p style="font-size:11px;color:#7a8499;margin:16px 0 0;padding-top:14px;border-top:1px solid rgba(45,53,85,.5)">
-				<?php esc_html_e( '50 URLs per batch · runs every 1 minute via WP-Cron · continues if you leave this page', 'dc-google-indexing' ); ?>&ensp;|&ensp;<?php esc_html_e( 'Queue:', 'dc-google-indexing' ); ?> <strong style="color:#c8d0e0" id="dc-gi-queue-count">—</strong>
+				<?php esc_html_e( '5 URLs per batch · runs every 1 minute via WP-Cron · continues if you leave this page', 'dc-google-indexing' ); ?>&ensp;|&ensp;<?php esc_html_e( 'Queue:', 'dc-google-indexing' ); ?> <strong style="color:#c8d0e0" id="dc-gi-queue-count">—</strong>
 				&ensp;|&ensp;<?php esc_html_e( 'Indexing quota:', 'dc-google-indexing' ); ?> <strong style="color:<?php echo esc_attr( dc_gi_is_quota_exhausted() ? '#fd5d93' : '#c8d0e0' ); ?>" id="dc-gi-quota-live"><?php echo esc_html( $quota_used . ' / ' . $quota_limit ); ?></strong>
 				&ensp;|&ensp;<a href="#" id="dc-gi-quota-details-link" style="font-size:11px;color:#6ab0f5"><?php esc_html_e( 'View API quota limits →', 'dc-google-indexing' ); ?></a>
 			</p>
