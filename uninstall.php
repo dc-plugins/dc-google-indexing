@@ -34,9 +34,6 @@ delete_transient( 'dc_gi_poll_lock' );
 delete_transient( 'dc_gi_sitemap_urls_cache' );
 delete_transient( 'dc_gi_inspect_sa_warn' );
 delete_transient( 'dc_gi_inspect_sitemap_warn' );
-delete_transient( 'dc_gi_inspect_quota_backoff' );
-delete_transient( 'dc_gi_inspect_poll_throttle' );
-delete_transient( 'dc_gi_analytics_sa_warn' );
 
 // Remove daily quota transients (Indexing API) and cloud API cache.
 global $wpdb;
@@ -49,7 +46,6 @@ wp_clear_scheduled_hook( 'dc_gi_check_watchlist' );
 wp_clear_scheduled_hook( 'dc_gi_watch_check_one_cron' );
 wp_clear_scheduled_hook( 'dc_gi_poll_batch' );
 wp_clear_scheduled_hook( 'dc_gi_inspect_batch' );
-wp_clear_scheduled_hook( 'dc_gi_analytics_batch' );
 
 // Drop URL inspection cache table.
 DC_GI_URL_Cache::drop_table();

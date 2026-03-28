@@ -71,12 +71,7 @@ class DC_GI_JWT {
 			);
 		}
 
-		if ( false === openssl_sign( $signing_input, $signature, $private_key, OPENSSL_ALGO_SHA256 ) ) {
-			return new WP_Error(
-				'dc_gi_sign_error',
-				__( 'Could not sign the JWT — openssl_sign() failed. Check your server\'s OpenSSL configuration.', 'dc-google-indexing' )
-			);
-		}
+		openssl_sign( $signing_input, $signature, $private_key, OPENSSL_ALGO_SHA256 );
 
 		return $signing_input . '.' . self::base64url_encode( $signature );
 	}

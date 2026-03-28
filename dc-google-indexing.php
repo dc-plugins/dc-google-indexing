@@ -6,7 +6,7 @@
  * Plugin Name: DC Google Indexing
  * Plugin URI:  https://github.com/dc-plugins/dc-google-indexing
  * Description: Submit URLs to Google's Web Search Indexing API for instant crawling. Supports manual batch submission and automatic submission on publish/update.
- * Version:     1.3.9
+ * Version:     1.2.0
  * Author:      lennilg
  * Author URI:  https://www.dampcig.dk
  * License:     GPL-2.0+
@@ -220,7 +220,6 @@ function dc_gi_on_post_password_set( int $post_id, WP_Post $post_after, WP_Post 
 		'added' => time(),
 	];
 	update_option( 'dc_gi_queue', $queue, false );
-	wp_cache_delete( 'dc_gi_queue', 'options' ); // Force-bust Redis persistent object cache.
 }
 
 // =============================================================================
@@ -246,7 +245,6 @@ function dc_gi_enqueue_url( string $url, string $type = 'URL_UPDATED' ): void {
 		'added' => time(),
 	];
 	update_option( 'dc_gi_queue', $queue, false );
-	wp_cache_delete( 'dc_gi_queue', 'options' ); // Force-bust Redis persistent object cache.
 }
 
 add_action( DC_GI_CRON_HOOK, 'dc_gi_process_queue' );
@@ -749,15 +747,8 @@ function dc_gi_run_poll_batch( bool $force = false ): string {
 add_action( DC_GI_INSPECT_HOOK, 'dc_gi_run_inspect_batch' );
 /**
  * WP-Cron callback: run one inspection batch to populate the URL cache from the sitemap.
- *
- * Returns the status string from DC_GI_URL_Cache::run_inspect_batch(), or
- * 'early:no_sa' when service-account credentials are missing/invalid.
- * The cron hook ignores this return value; callers such as the long-poll
- * AJAX handler use it to surface the reason the cache is not yet populated.
- *
- * @return string Status string: 'ok', 'ok:complete', 'early:no_sa', 'early:quota_backoff', 'early:no_urls'.
  */
-function dc_gi_run_inspect_batch(): string {
+function dc_gi_run_inspect_batch(): void {
 	$settings = dc_gi_get_settings();
 	if ( empty( $settings['service_account_json'] ) ) {
 		// Only log once per hour so we don't flood the log on every cron tick.
@@ -765,7 +756,7 @@ function dc_gi_run_inspect_batch(): string {
 			dc_gi_log_info( '', 'INSPECT_SKIP', __( 'Inspection cache not building — service account credentials not configured.', 'dc-google-indexing' ) );
 			set_transient( 'dc_gi_inspect_sa_warn', 1, HOUR_IN_SECONDS );
 		}
-		return 'early:no_sa';
+		return;
 	}
 	$sa = json_decode( $settings['service_account_json'], true );
 	if ( ! $sa || empty( $sa['client_email'] ) || empty( $sa['private_key'] ) ) {
@@ -773,19 +764,23 @@ function dc_gi_run_inspect_batch(): string {
 			dc_gi_log_info( '', 'INSPECT_SKIP', __( 'Inspection cache not building — service account JSON is invalid (missing client_email or private_key).', 'dc-google-indexing' ) );
 			set_transient( 'dc_gi_inspect_sa_warn', 1, HOUR_IN_SECONDS );
 		}
-		return 'early:no_sa';
+		return;
 	}
 	$status = DC_GI_URL_Cache::run_inspect_batch( $sa );
 	if ( 'early:quota_backoff' === $status ) {
 		// URL Inspection API quota is temporarily exhausted — cron will retry after backoff expires.
-		return $status;
+		return;
+	} elseif ( 0 === strpos( $status, 'early:sitemap_error' ) ) {
+		if ( false === get_transient( 'dc_gi_inspect_sitemap_warn' ) ) {
+			dc_gi_log_info( '', 'INSPECT_SITEMAP_ERR', $status );
+			set_transient( 'dc_gi_inspect_sitemap_warn', 1, HOUR_IN_SECONDS );
+		}
 	} elseif ( 'early:no_urls' === $status ) {
 		if ( false === get_transient( 'dc_gi_inspect_sitemap_warn' ) ) {
 			dc_gi_log_info( '', 'INSPECT_SITEMAP_ERR', __( 'Inspection cache not building — no URLs found in sitemap.', 'dc-google-indexing' ) );
 			set_transient( 'dc_gi_inspect_sitemap_warn', 1, HOUR_IN_SECONDS );
 		}
 	}
-	return $status;
 }
 
 // =============================================================================
