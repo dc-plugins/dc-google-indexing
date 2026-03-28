@@ -35,6 +35,7 @@ delete_transient( 'dc_gi_sitemap_urls_cache' );
 delete_transient( 'dc_gi_inspect_sa_warn' );
 delete_transient( 'dc_gi_inspect_sitemap_warn' );
 delete_transient( 'dc_gi_inspect_quota_backoff' );
+delete_transient( 'dc_gi_inspect_poll_throttle' );
 delete_transient( 'dc_gi_analytics_sa_warn' );
 
 // Remove daily quota transients (Indexing API) and cloud API cache.
