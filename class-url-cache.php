@@ -463,7 +463,7 @@ class DC_GI_URL_Cache {
 
 			$rows_count = count( $rows );
 			$start_row += $rows_count;
-		} while ( 25000 === $rows_count );
+		} while ( $rows_count >= 25000 );
 
 		return 'ok:' . $updated;
 	}

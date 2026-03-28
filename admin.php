@@ -2469,7 +2469,7 @@ function dc_gi_ajax_fetch_analytics(): void {
 	}
 
 	$allowed_days = [ 7, 28, 90 ];
-	$days_raw     = isset( $_POST['days'] ) ? (int) wp_unslash( $_POST['days'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
+	$days_raw     = isset( $_POST['days'] ) ? (int) wp_unslash( $_POST['days'] ) : 0;
 	$days         = in_array( $days_raw, $allowed_days, true )
 		? $days_raw
 		: max( 1, (int) ( $settings['analytics_days'] ?? 28 ) );
@@ -2534,9 +2534,9 @@ function dc_gi_handle_poll_reset(): void {
 	exit;
 }
 
-	/**
-	 * Handle the clear-URL-cache form action.
-	 */
+/**
+ * Handle the clear-URL-cache form action.
+ */
 function dc_gi_handle_cache_clear(): void {
 	check_admin_referer( 'dc_gi_cache_clear' );
 	if ( ! current_user_can( 'manage_options' ) ) {
