@@ -6,7 +6,7 @@
  * Plugin Name: DC Google Indexing
  * Plugin URI:  https://github.com/dc-plugins/dc-google-indexing
  * Description: Submit URLs to Google's Web Search Indexing API for instant crawling. Supports manual batch submission and automatic submission on publish/update.
- * Version:     1.3.0
+ * Version:     1.3.9
  * Author:      lennilg
  * Author URI:  https://www.dampcig.dk
  * License:     GPL-2.0+
