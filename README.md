@@ -2,7 +2,7 @@
 
 > Submit URLs to Google's Web Search Indexing API for instant crawling — no waiting for Googlebot.
 
-![Version](https://img.shields.io/badge/version-1.2.0-blue)
+![Version](https://img.shields.io/badge/version-1.3.9-blue)
 ![WordPress](https://img.shields.io/badge/WordPress-6.8%2B-21759b)
 ![PHP](https://img.shields.io/badge/PHP-7.4%2B-777bb4)
 ![License](https://img.shields.io/badge/license-GPL--2.0%2B-green)
@@ -78,6 +78,15 @@ vendor/bin/phpcs
 There is no test suite. PHPCS is the only validation step — run it before opening a pull request.
 
 ## Changelog
+
+### 1.3.9
+- **Fix:** Added third-party service disclosures to the plugin readme in compliance with WordPress.org guidelines.
+
+### 1.3.0
+- **New:** Search Analytics tab — fetches clicks, impressions, CTR, and average position from Google Search Console and overlays the data on the Index Status table.
+- **New:** Quality Assurance scanner — crawls flagged URLs for common on-page SEO issues (missing titles, canonical mismatches, noindex tags, redirect chains) directly from the admin dashboard.
+- **New:** Real-time quota metrics panel powered by the Google Service Usage API, showing the live daily quota limit alongside the plugin's own usage counter.
+- **Improvement:** Analytics date-range selector (7 / 28 / 90 days) added to the Index Status view.
 
 ### 1.2.0
 - **New:** Explicit Search Console property setting with support for URL-prefix and `sc-domain:` properties.

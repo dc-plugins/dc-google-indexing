@@ -4,7 +4,7 @@ Tags: google, indexing, seo, search console, instant indexing
 Requires at least: 6.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.2.0
+Stable tag: 1.3.9
 License: GPL-2.0+
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -86,7 +86,50 @@ The service account JSON is stored in your WordPress database (wp_options). It i
 5. Log — submission history with status per URL
 6. Index Status — verdict distribution donut chart and colour-coded coverage-state breakdown
 
+== Third Party Services ==
+
+This plugin communicates with the following external services operated by Google LLC. Data is only transmitted when a user has configured a Google Cloud service account and actively uses the plugin.
+
+= Google Web Search Indexing API =
+
+* Service URL: https://indexing.googleapis.com/
+* Purpose: Submits page URLs to Google so they can be crawled and indexed immediately.
+* Privacy Policy: https://policies.google.com/privacy
+* Terms of Service: https://developers.google.com/search/apis/indexing-api/v3/terms
+
+= Google Search Console API (URL Inspection & Search Analytics) =
+
+* Service URLs: https://searchconsole.googleapis.com/ and https://www.googleapis.com/webmasters/v3/
+* Purpose: Inspects the indexing status of individual URLs, retrieves the list of verified Search Console properties, and fetches search-performance analytics (clicks, impressions, CTR, position).
+* Privacy Policy: https://policies.google.com/privacy
+* Terms of Service: https://developers.google.com/terms/
+
+= Google OAuth2 Token Endpoint =
+
+* Service URL: https://oauth2.googleapis.com/token
+* Purpose: Exchanges a signed JWT (built from the user-supplied service account key) for a short-lived bearer token used to authenticate all API requests. No user credentials beyond the service account key are transmitted.
+* Privacy Policy: https://policies.google.com/privacy
+* Terms of Service: https://policies.google.com/terms
+
+= Google Service Usage API =
+
+* Service URL: https://serviceusage.googleapis.com/
+* Purpose: Retrieves real API quota limits for the Indexing API to display accurate quota information in the admin dashboard.
+* Privacy Policy: https://policies.google.com/privacy
+* Terms of Service: https://developers.google.com/terms/
+
+No personal user data is sent to any of these services. Only the URLs of pages on the user's own WordPress site and the service account credentials supplied by the site administrator are transmitted.
+
 == Changelog ==
+
+= 1.3.9 =
+* Fix: Added third-party service disclosures to the plugin readme in compliance with WordPress.org guidelines.
+
+= 1.3.0 =
+* New: Search Analytics tab — fetches clicks, impressions, CTR, and average position from Google Search Console and overlays the data on the Index Status table.
+* New: Quality Assurance scanner — crawls flagged URLs for common on-page SEO issues (missing titles, canonical mismatches, noindex tags, redirect chains) directly from the admin dashboard.
+* New: Real-time quota metrics panel powered by the Google Service Usage API, showing the live daily quota limit alongside the plugin's own usage counter.
+* Improvement: Analytics date-range selector (7 / 28 / 90 days) added to the Index Status view.
 
 = 1.2.0 =
 * New: Explicit Search Console property setting with support for URL-prefix and `sc-domain:` properties.
@@ -107,6 +150,12 @@ The service account JSON is stored in your WordPress database (wp_options). It i
 * Initial release.
 
 == Upgrade Notice ==
+
+= 1.3.9 =
+Adds third-party service disclosures required by WordPress.org guidelines. No code-level changes.
+
+= 1.3.0 =
+Adds Search Analytics overlay, a Quality Assurance scanner, and a real-time quota metrics panel.
 
 = 1.2.0 =
 Adds Search Console property-aware setup, a richer connection test, and per-URL inspect/re-submit actions in the Index Status dashboard.
