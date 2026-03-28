@@ -21,8 +21,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'DC_GI_VERSION', '1.2.0' );
-define( 'DC_GI_DB_VERSION', '1.3.0' ); // Increment when the URL-cache table schema changes.
+define( 'DC_GI_VERSION', '1.3.0' );
+define( 'DC_GI_DB_VERSION', '1.4.0' ); // Increment when the URL-cache table schema changes.
 define( 'DC_GI_FILE', __FILE__ );
 define( 'DC_GI_DIR', plugin_dir_path( __FILE__ ) );
 define( 'DC_GI_CRON_HOOK', 'dc_gi_process_queue' );
@@ -30,6 +30,7 @@ define( 'DC_GI_WATCH_HOOK', 'dc_gi_check_watchlist' );
 define( 'DC_GI_WATCH_CHECK_HOOK', 'dc_gi_watch_check_one_cron' );
 define( 'DC_GI_POLL_HOOK', 'dc_gi_poll_batch' );
 define( 'DC_GI_INSPECT_HOOK', 'dc_gi_inspect_batch' );
+define( 'DC_GI_ANALYTICS_HOOK', 'dc_gi_analytics_batch' );
 define( 'DC_GI_DAILY_CAP', 200 );
 
 /**
@@ -781,6 +782,40 @@ function dc_gi_run_inspect_batch(): void {
 }
 
 // =============================================================================
+// ANALYTICS BATCH — fetch Search Analytics data twice daily
+// =============================================================================
+
+add_action( DC_GI_ANALYTICS_HOOK, 'dc_gi_run_analytics_batch' );
+/**
+ * WP-Cron callback: fetch Search Analytics data for all cached URLs.
+ *
+ * Runs twice daily (twicedaily schedule).  Silently skips when credentials
+ * are not configured, logging a warning at most once per hour.
+ */
+function dc_gi_run_analytics_batch(): void {
+	$settings = dc_gi_get_settings();
+	if ( empty( $settings['service_account_json'] ) ) {
+		if ( false === get_transient( 'dc_gi_analytics_sa_warn' ) ) {
+			dc_gi_log_info( '', 'ANALYTICS_SKIP', __( 'Search Analytics not fetching — service account credentials not configured.', 'dc-google-indexing' ) );
+			set_transient( 'dc_gi_analytics_sa_warn', 1, HOUR_IN_SECONDS );
+		}
+		return;
+	}
+	$sa = json_decode( $settings['service_account_json'], true );
+	if ( ! $sa || empty( $sa['client_email'] ) || empty( $sa['private_key'] ) ) {
+		if ( false === get_transient( 'dc_gi_analytics_sa_warn' ) ) {
+			dc_gi_log_info( '', 'ANALYTICS_SKIP', __( 'Search Analytics not fetching — service account JSON is invalid.', 'dc-google-indexing' ) );
+			set_transient( 'dc_gi_analytics_sa_warn', 1, HOUR_IN_SECONDS );
+		}
+		return;
+	}
+
+	$days     = max( 1, (int) ( $settings['analytics_days'] ?? 28 ) );
+	$site_url = dc_gi_get_search_console_property( $settings );
+	DC_GI_URL_Cache::run_analytics_batch( $sa, $site_url, $days );
+}
+
+// =============================================================================
 // HELPERS
 // =============================================================================
 
@@ -911,6 +946,9 @@ function dc_gi_activate(): void {
 	if ( ! wp_next_scheduled( DC_GI_INSPECT_HOOK ) ) {
 		wp_schedule_event( time() + 90, 'dc_gi_every1', DC_GI_INSPECT_HOOK );
 	}
+	if ( ! wp_next_scheduled( DC_GI_ANALYTICS_HOOK ) ) {
+		wp_schedule_event( time() + 120, 'twicedaily', DC_GI_ANALYTICS_HOOK );
+	}
 }
 
 add_action( 'init', 'dc_gi_maybe_reschedule_crons' );
@@ -945,6 +983,10 @@ function dc_gi_maybe_reschedule_crons(): void {
 	// Inspection cron: stagger by 90s so it doesn't fire at the same time as polling.
 	if ( ! wp_next_scheduled( DC_GI_INSPECT_HOOK ) ) {
 		wp_schedule_event( time() + 90, 'dc_gi_every1', DC_GI_INSPECT_HOOK );
+	}
+	// Analytics cron: runs twice daily to fetch Search Analytics data.
+	if ( ! wp_next_scheduled( DC_GI_ANALYTICS_HOOK ) ) {
+		wp_schedule_event( time() + 120, 'twicedaily', DC_GI_ANALYTICS_HOOK );
 	}
 	// Restore the recurring watchlist check-one cron if it was lost but is still needed.
 	if ( get_option( 'dc_gi_watch_active', false ) && ! wp_next_scheduled( DC_GI_WATCH_CHECK_HOOK ) ) {
@@ -1111,6 +1153,7 @@ function dc_gi_deactivate(): void {
 	wp_clear_scheduled_hook( DC_GI_WATCH_CHECK_HOOK );
 	wp_clear_scheduled_hook( DC_GI_POLL_HOOK );
 	wp_clear_scheduled_hook( DC_GI_INSPECT_HOOK );
+	wp_clear_scheduled_hook( DC_GI_ANALYTICS_HOOK );
 	update_option( 'dc_gi_poll_active', false );
 	delete_option( 'dc_gi_watch_active' );
 	delete_option( 'dc_gi_watch_offset' );
