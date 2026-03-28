@@ -1338,6 +1338,7 @@ function dc_gi_handle_clear_queue(): void {
 		wp_die( esc_html__( 'Forbidden', 'dc-google-indexing' ) );
 	}
 	update_option( 'dc_gi_queue', [], false );
+	wp_cache_delete( 'dc_gi_queue', 'options' ); // Force-bust Redis persistent object cache.
 	wp_safe_redirect(
 		add_query_arg(
 			[
