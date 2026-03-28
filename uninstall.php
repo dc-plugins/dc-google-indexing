@@ -15,6 +15,7 @@ delete_option( 'dc_gi_settings' );
 delete_option( 'dc_gi_queue' );
 delete_option( 'dc_gi_log' );
 delete_option( 'dc_gi_watchlist' );
+delete_option( 'dc_gi_connection_test' );
 delete_option( 'dc_gi_poll_seen' );
 delete_option( 'dc_gi_poll_active' );
 delete_option( 'dc_gi_watch_active' );

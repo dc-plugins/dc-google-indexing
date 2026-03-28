@@ -507,7 +507,7 @@ class DC_GI_URL_Cache {
 	 * @return string  'ok', 'ok:complete', 'early:sitemap_error', 'early:no_urls'
 	 */
 	public static function run_inspect_batch( array $sa ): string {
-		$site_url = trailingslashit( get_home_url() );
+		$site_url = dc_gi_get_search_console_property();
 
 		$all_urls = DC_GI_Sitemap::get_urls( 2000 );
 		if ( is_wp_error( $all_urls ) || empty( $all_urls ) ) {

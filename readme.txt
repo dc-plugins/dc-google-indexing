@@ -4,7 +4,7 @@ Tags: google, indexing, seo, search console, instant indexing
 Requires at least: 6.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.1.0
+Stable tag: 1.2.0
 License: GPL-2.0+
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -26,10 +26,13 @@ The plugin uses a Google Cloud Service Account and OAuth2 to authenticate reques
 * 📊 Live queue viewer with "Process Now" button
 * 📝 Submission log with success/error status per URL
 * 📈 Daily quota tracker (200/day default)
+* 🔐 Property-aware onboarding with Search Console property selection and connection diagnostics
 * 🧪 Test connection — validates credentials without sending any URL
 * 🔑 No external libraries — pure PHP JWT/OAuth2 implementation
 * ✅ Getting Started guide with step-by-step setup instructions
 * 🗂️ Index Status dashboard — background URL inspection with verdict & coverage breakdown
+* 🔎 URL inspection detail with cached inspection data and live Indexing API metadata
+* ♻️ One-click re-submit for URLs that are still not indexed
 * ⚡ Cache-based polling — zero Inspection API quota consumed during queue polling
 * 🌍 Translation ready
 
@@ -37,7 +40,7 @@ The plugin uses a Google Cloud Service Account and OAuth2 to authenticate reques
 
 * Google Cloud project with Web Search Indexing API enabled
 * Service Account with JSON key
-* Site verified in Google Search Console with the service account added as a Full user
+* Site verified in Google Search Console with the service account added as an Owner
 * PHP `openssl` extension (standard on all hosts)
 
 == Installation ==
@@ -85,6 +88,13 @@ The service account JSON is stored in your WordPress database (wp_options). It i
 
 == Changelog ==
 
+= 1.2.0 =
+* New: Explicit Search Console property setting with support for URL-prefix and `sc-domain:` properties.
+* New: Connection diagnostics that verify Indexing API auth, Search Console auth, and selected-property access.
+* New: Index Status inspect view with per-URL metadata from both the URL Inspection API cache and the Indexing API metadata endpoint.
+* New: Re-submit actions directly from the Index Status table for URLs that are still excluded.
+* Improvement: Removed the optional footer-credit feature to better align with hosted marketplace expectations.
+
 = 1.1.0 =
 * New: Index Status dashboard tab with verdict distribution (donut chart) and colour-coded coverage-state breakdown.
 * New: Background URL inspection cron — inspects 3 URLs/min via the URL Inspection API and stores results in a dedicated DB table.
@@ -97,6 +107,9 @@ The service account JSON is stored in your WordPress database (wp_options). It i
 * Initial release.
 
 == Upgrade Notice ==
+
+= 1.2.0 =
+Adds Search Console property-aware setup, a richer connection test, and per-URL inspect/re-submit actions in the Index Status dashboard.
 
 = 1.1.0 =
 Adds a new Index Status tab with background URL inspection and a cache-based polling system. A new database table (`{prefix}dc_gi_url_cache`) is created automatically on upgrade.

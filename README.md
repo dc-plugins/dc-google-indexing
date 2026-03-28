@@ -2,7 +2,7 @@
 
 > Submit URLs to Google's Web Search Indexing API for instant crawling — no waiting for Googlebot.
 
-![Version](https://img.shields.io/badge/version-1.1.0-blue)
+![Version](https://img.shields.io/badge/version-1.2.0-blue)
 ![WordPress](https://img.shields.io/badge/WordPress-6.8%2B-21759b)
 ![PHP](https://img.shields.io/badge/PHP-7.4%2B-777bb4)
 ![License](https://img.shields.io/badge/license-GPL--2.0%2B-green)
@@ -21,7 +21,10 @@ Authentication uses a Google Cloud Service Account with OAuth2 — implemented i
 - 📊 **Live queue viewer** with "Process Now" button
 - 📝 **Submission log** with success/error status per URL
 - 📈 **Daily quota tracker** (200/day default)
+- 🔐 **Property-aware onboarding** with Search Console property selection and connection diagnostics
 - 🗂️ **Index Status dashboard** — background URL inspection with verdict & colour-coded coverage-state breakdown
+- 🔎 **URL inspection detail** with cached inspection data and live Indexing API notification metadata
+- ♻️ **One-click re-submit** for URLs that are still not indexed
 - ⚡ **Cache-based polling** — zero Inspection API quota consumed during queue polling
 - 🧪 **Test connection** — validates credentials without submitting any URL
 - 🔑 **No external libraries** — pure PHP JWT/OAuth2 implementation
@@ -34,7 +37,7 @@ Authentication uses a Google Cloud Service Account with OAuth2 — implemented i
 - PHP 7.4+ with `openssl` extension
 - Google Cloud project with [Web Search Indexing API](https://console.cloud.google.com/apis/library/indexing.googleapis.com) enabled
 - Service Account with a JSON key
-- Site verified in [Google Search Console](https://search.google.com/search-console) with the service account added as a **Full user**
+- Site verified in [Google Search Console](https://search.google.com/search-console) with the service account added as an **Owner**
 
 ## Installation
 
@@ -75,6 +78,13 @@ vendor/bin/phpcs
 There is no test suite. PHPCS is the only validation step — run it before opening a pull request.
 
 ## Changelog
+
+### 1.2.0
+- **New:** Explicit Search Console property setting with support for URL-prefix and `sc-domain:` properties.
+- **New:** Connection diagnostics that verify Indexing API auth, Search Console auth, and selected-property access.
+- **New:** Index Status inspect view with per-URL metadata from both the URL Inspection API cache and the Indexing API metadata endpoint.
+- **New:** Re-submit actions directly from the Index Status table for URLs that are still excluded.
+- **Improvement:** Removed the optional footer-credit feature to better align with hosted marketplace expectations.
 
 ### 1.1.0
 - **New:** Index Status dashboard tab with verdict distribution (donut chart) and colour-coded coverage-state breakdown.

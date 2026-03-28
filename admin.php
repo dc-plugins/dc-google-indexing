@@ -1064,6 +1064,9 @@ function dc_gi_handle_save(): void {
 	$raw_json = isset( $_POST['service_account_json'] )
 		? sanitize_textarea_field( wp_unslash( $_POST['service_account_json'] ) )
 		: '';
+	$property = dc_gi_normalize_search_console_property(
+		sanitize_text_field( wp_unslash( $_POST['search_console_property'] ?? '' ) )
+	);
 
 	if ( ! empty( $raw_json ) ) {
 		$parsed = json_decode( $raw_json, true );
@@ -1082,9 +1085,17 @@ function dc_gi_handle_save(): void {
 		// Clear cached token when credentials change.
 		if ( ( $old['service_account_json'] ?? '' ) !== $raw_json ) {
 			delete_transient( 'dc_gi_access_token' );
+			delete_transient( 'dc_gi_inspection_token' );
+			delete_transient( 'dc_gi_cloud_token' );
+			delete_transient( 'dc_gi_quota_limits' );
+			delete_option( 'dc_gi_connection_test' );
 		}
 	} else {
 		$raw_json = $old['service_account_json'] ?? '';
+	}
+
+	if ( dc_gi_normalize_search_console_property( (string) ( $old['search_console_property'] ?? '' ) ) !== $property ) {
+		delete_option( 'dc_gi_connection_test' );
 	}
 
 	$post_types = isset( $_POST['post_types'] ) && is_array( $_POST['post_types'] )
@@ -1094,12 +1105,12 @@ function dc_gi_handle_save(): void {
 	update_option(
 		'dc_gi_settings',
 		[
-			'service_account_json' => $raw_json,
-			'auto_submit'          => ! empty( $_POST['auto_submit'] ) ? 1 : 0,
-			'auto_delete'          => ! empty( $_POST['auto_delete'] ) ? 1 : 0,
-			'post_types'           => $post_types,
-			'daily_quota'          => min( 200, max( 1, absint( isset( $_POST['daily_quota'] ) ? wp_unslash( $_POST['daily_quota'] ) : 200 ) ) ),
-			'footer_credit'        => ! empty( $_POST['footer_credit'] ) ? 1 : 0,
+			'service_account_json'    => $raw_json,
+			'search_console_property' => $property,
+			'auto_submit'             => ! empty( $_POST['auto_submit'] ) ? 1 : 0,
+			'auto_delete'             => ! empty( $_POST['auto_delete'] ) ? 1 : 0,
+			'post_types'              => $post_types,
+			'daily_quota'             => min( 200, max( 1, absint( isset( $_POST['daily_quota'] ) ? wp_unslash( $_POST['daily_quota'] ) : 200 ) ) ),
 		]
 	);
 
@@ -1113,6 +1124,106 @@ function dc_gi_handle_save(): void {
 		)
 	);
 	exit;
+}
+
+/**
+ * Find the selected Search Console property inside the accessible property list.
+ *
+ * @param array  $properties Array of Search Console properties from the API.
+ * @param string $selected   Normalized property string.
+ * @return array|null
+ */
+function dc_gi_find_matching_property( array $properties, string $selected ): ?array {
+	foreach ( $properties as $property ) {
+		$site_url = dc_gi_normalize_search_console_property( (string) ( $property['siteUrl'] ?? '' ) );
+		if ( '' !== $site_url && $site_url === $selected ) {
+			return $property;
+		}
+	}
+
+	return null;
+}
+
+/**
+ * Run a multi-step connection diagnostic against Google APIs and Search Console.
+ *
+ * @param array  $sa                Decoded service account JSON.
+ * @param string $selected_property Normalized Search Console property.
+ * @return array<string,mixed>
+ */
+function dc_gi_run_connection_diagnostics( array $sa, string $selected_property ): array {
+	delete_transient( 'dc_gi_access_token' );
+	delete_transient( 'dc_gi_inspection_token' );
+	delete_transient( 'dc_gi_cloud_token' );
+
+	$diag = [
+		'checked_at'        => time(),
+		'selected_property' => $selected_property,
+		'indexing_api'      => [
+			'ok'      => false,
+			'message' => '',
+		],
+		'inspection_api'    => [
+			'ok'      => false,
+			'message' => '',
+		],
+		'property_access'   => [
+			'ok'               => false,
+			'message'          => '',
+			'permission_level' => '',
+		],
+		'properties'        => [],
+	];
+
+	$indexing_token = DC_GI_JWT::get_access_token( $sa );
+	if ( is_wp_error( $indexing_token ) ) {
+		$diag['indexing_api']['message'] = $indexing_token->get_error_message();
+	} else {
+		$diag['indexing_api'] = [
+			'ok'      => true,
+			'message' => __( 'Indexing API access token acquired successfully.', 'dc-google-indexing' ),
+		];
+	}
+
+	$inspection_token = DC_GI_JWT::get_inspection_token( $sa );
+	if ( is_wp_error( $inspection_token ) ) {
+		$diag['inspection_api']['message'] = $inspection_token->get_error_message();
+		return $diag;
+	}
+
+	$diag['inspection_api'] = [
+		'ok'      => true,
+		'message' => __( 'Search Console inspection token acquired successfully.', 'dc-google-indexing' ),
+	];
+
+	$properties = DC_GI_JWT::list_search_console_properties( $sa );
+	if ( is_wp_error( $properties ) ) {
+		$diag['property_access']['message'] = $properties->get_error_message();
+		return $diag;
+	}
+
+	$diag['properties'] = $properties;
+	$matched            = dc_gi_find_matching_property( $properties, $selected_property );
+
+	if ( $matched ) {
+		$permission              = (string) ( $matched['permissionLevel'] ?? '' );
+		$diag['property_access'] = [
+			'ok'               => true,
+			'message'          => sprintf(
+				/* translators: %s: permission level returned by Search Console */
+				__( 'Selected property is accessible with permission level: %s.', 'dc-google-indexing' ),
+				$permission ? $permission : __( 'unknown', 'dc-google-indexing' )
+			),
+			'permission_level' => $permission,
+		];
+	} else {
+		$diag['property_access']['message'] = __(
+			'The selected Search Console property was not found in the service account\'s accessible properties. Add the service account to that property and re-run the test.',
+			'dc-google-indexing'
+		);
+	}
+
+	return $diag;
 }
 
 /**
@@ -1138,10 +1249,25 @@ function dc_gi_handle_test(): void {
 		exit;
 	}
 
-	$sa     = json_decode( $settings['service_account_json'], true );
-	$result = DC_GI_JWT::test_connection( $sa );
-	$notice = is_wp_error( $result ) ? 'test_fail' : 'test_ok';
-	$msg    = is_wp_error( $result ) ? rawurlencode( $result->get_error_message() ) : '';
+	$sa   = json_decode( $settings['service_account_json'], true );
+	$diag = dc_gi_run_connection_diagnostics( $sa, dc_gi_get_search_console_property( $settings ) );
+	update_option( 'dc_gi_connection_test', $diag, false );
+
+	$notice = ( ! empty( $diag['indexing_api']['ok'] ) && ! empty( $diag['inspection_api']['ok'] ) && ! empty( $diag['property_access']['ok'] ) )
+		? 'test_ok'
+		: ( ! empty( $diag['indexing_api']['ok'] ) && ! empty( $diag['inspection_api']['ok'] ) ? 'test_warn' : 'test_fail' );
+	$msg    = '';
+	if ( 'test_fail' === $notice ) {
+		$error_message = '';
+		if ( ! empty( $diag['indexing_api']['message'] ) ) {
+			$error_message = (string) $diag['indexing_api']['message'];
+		} elseif ( ! empty( $diag['inspection_api']['message'] ) ) {
+			$error_message = (string) $diag['inspection_api']['message'];
+		} else {
+			$error_message = (string) ( $diag['property_access']['message'] ?? '' );
+		}
+		$msg = rawurlencode( $error_message );
+	}
 
 	wp_safe_redirect(
 		add_query_arg(
@@ -1405,7 +1531,7 @@ function dc_gi_ajax_watch_check_one(): void {
 	}
 
 	$offset   = max( 0, (int) ( $_POST['offset'] ?? 0 ) );
-	$site_url = trailingslashit( get_home_url() );
+	$site_url = dc_gi_get_search_console_property( $settings );
 	$list     = get_option( 'dc_gi_watchlist', [] );
 
 	// Build flat array of all entries (pending + already indexed — we skip indexed in loop).
@@ -2396,11 +2522,14 @@ function dc_gi_render_page(): void {
 	$quota_used  = dc_gi_get_quota_used();
 	$quota_limit = min( 200, (int) ( $settings['daily_quota'] ?? 200 ) );
 	$has_sa      = ! empty( $settings['service_account_json'] );
+	$property    = dc_gi_get_search_console_property( $settings );
+	$sa_decoded  = [];
 	$sa_email    = '';
 	if ( $has_sa ) {
 		$sa_decoded = json_decode( $settings['service_account_json'], true );
 		$sa_email   = $sa_decoded['client_email'] ?? '';
 	}
+	$connection_test = (array) get_option( 'dc_gi_connection_test', [] );
 
 	// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 	$tab = isset( $_GET['tab'] ) ? sanitize_key( wp_unslash( $_GET['tab'] ) ) : ( $has_sa ? 'settings' : 'start' );
@@ -2410,10 +2539,28 @@ function dc_gi_render_page(): void {
 	$errmsg = isset( $_GET['errmsg'] ) ? sanitize_text_field( rawurldecode( wp_unslash( $_GET['errmsg'] ) ) ) : '';
 	// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 	$queued_count = absint( isset( $_GET['count'] ) ? wp_unslash( $_GET['count'] ) : 0 );
+	// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+	$inspect_url = esc_url_raw( wp_unslash( $_GET['inspect_url'] ?? '' ) );
 
-	$last_poll  = get_transient( 'dc_gi_last_poll' );
-	$qa_results = (array) get_option( 'dc_gi_qa_results', [] );
-	$qa_pending = (array) get_option( 'dc_gi_qa_pending', [] );
+	$last_poll     = get_transient( 'dc_gi_last_poll' );
+	$qa_results    = (array) get_option( 'dc_gi_qa_results', [] );
+	$qa_pending    = (array) get_option( 'dc_gi_qa_pending', [] );
+	$inspect_entry = null;
+	$inspect_meta  = null;
+	$inspect_error = '';
+
+	if ( 'index_status' === $tab && $inspect_url && class_exists( 'DC_GI_URL_Cache' ) ) {
+		$inspect_entry = DC_GI_URL_Cache::get_entry( $inspect_url );
+		if ( ! $inspect_entry ) {
+			$inspect_error = __( 'That URL is not in the local inspection cache yet.', 'dc-google-indexing' );
+		} elseif ( $has_sa && ! empty( $sa_decoded['client_email'] ) && ! empty( $sa_decoded['private_key'] ) ) {
+			$inspect_meta = DC_GI_JWT::get_url_notification_metadata( $sa_decoded, $inspect_url );
+			if ( is_wp_error( $inspect_meta ) ) {
+				$inspect_error = $inspect_meta->get_error_message();
+				$inspect_meta  = null;
+			}
+		}
+	}
 
 	$notices = [
 		'saved'                 => [ 'success', __( 'Settings saved.', 'dc-google-indexing' ) ],
@@ -2429,7 +2576,8 @@ function dc_gi_render_page(): void {
 		'processed'             => [ 'success', __( 'Queue processed.', 'dc-google-indexing' ) ],
 		'queue_cleared'         => [ 'success', __( 'Queue cleared.', 'dc-google-indexing' ) ],
 		'log_cleared'           => [ 'success', __( 'Log cleared.', 'dc-google-indexing' ) ],
-		'test_ok'               => [ 'success', __( '&#10003; Connection successful — credentials are valid.', 'dc-google-indexing' ) ],
+		'test_ok'               => [ 'success', __( '&#10003; Connection successful — credentials and Search Console property access look good.', 'dc-google-indexing' ) ],
+		'test_warn'             => [ 'warning', __( 'Credentials are valid, but the selected Search Console property still needs attention. Review the connection report below.', 'dc-google-indexing' ) ],
 		'test_fail'             => [ 'error', $errmsg ? esc_html( $errmsg ) : __( 'Connection failed.', 'dc-google-indexing' ) ],
 		'test_no_sa'            => [ 'error', __( 'No service account saved. Paste your JSON and save first.', 'dc-google-indexing' ) ],
 		'poll_no_sitemap'       => [ 'error', $errmsg ? esc_html( $errmsg ) : __( 'No sitemap found. Ensure your site has a public XML sitemap.', 'dc-google-indexing' ) ],
@@ -2475,6 +2623,10 @@ function dc_gi_render_page(): void {
 					<span class="dc-gi-chip-val err"><?php esc_html_e( '✗ No service account configured', 'dc-google-indexing' ); ?></span>
 				</span>
 			<?php endif; ?>
+			<span class="dc-gi-statusbar-chip">
+				<span><?php esc_html_e( 'Property', 'dc-google-indexing' ); ?></span>
+				<span class="dc-gi-chip-val"><code><?php echo esc_html( $property ); ?></code></span>
+			</span>
 			<span class="dc-gi-statusbar-chip">
 				<span><?php esc_html_e( 'Quota today', 'dc-google-indexing' ); ?></span>
 				<span class="dc-gi-chip-val"><?php echo esc_html( $quota_used . ' / ' . $quota_limit ); ?></span>
@@ -2578,9 +2730,10 @@ function dc_gi_render_page(): void {
 
 		<!-- Progress bar -->
 			<?php
-			$step_done = [ false, false, false, false, false ];
+			$property_connected = ! empty( $connection_test['property_access']['ok'] );
+			$step_done          = [ false, false, false, false, false ];
 			if ( $has_sa ) {
-				$step_done = [ true, true, true, true, true ];
+				$step_done = [ true, true, true, $property_connected, $property_connected ];
 			}
 			$step_labels = [
 				__( 'Cloud Project', 'dc-google-indexing' ),
@@ -2845,11 +2998,22 @@ function dc_gi_render_page(): void {
 					<span class="dc-gi-check-label"><strong><?php esc_html_e( 'Service account connected', 'dc-google-indexing' ); ?></strong></span>
 					<span class="dc-gi-check-value"><code><?php echo esc_html( $sa_email ); ?></code></span>
 				</div>
+				<div class="dc-gi-check-row" style="margin-top:8px">
+					<span class="dc-gi-check-icon" style="color:#46b450">🔎</span>
+					<span class="dc-gi-check-label"><strong><?php esc_html_e( 'Search Console property', 'dc-google-indexing' ); ?></strong></span>
+					<span class="dc-gi-check-value"><code><?php echo esc_html( $property ); ?></code></span>
+				</div>
 
 				<div class="dc-gi-callout ok" style="margin-top:14px">
 					<strong><?php esc_html_e( '🎉 You\'re all set!', 'dc-google-indexing' ); ?></strong>
-					<?php esc_html_e( 'Your site is connected. Google will be notified as soon as you publish or update content.', 'dc-google-indexing' ); ?>
+					<?php esc_html_e( 'Your site is connected. Next, run the connection test from Settings to verify property access and inspect quota visibility.', 'dc-google-indexing' ); ?>
 				</div>
+					<?php if ( empty( $connection_test['checked_at'] ) || empty( $connection_test['property_access']['ok'] ) ) : ?>
+				<div class="dc-gi-callout warn" style="margin-top:14px">
+					<strong><?php esc_html_e( 'One last step remains.', 'dc-google-indexing' ); ?></strong>
+						<?php esc_html_e( 'Open Settings and run the connection test to confirm that this exact Search Console property is visible to the service account.', 'dc-google-indexing' ); ?>
+				</div>
+				<?php endif; ?>
 
 				<div class="dc-gi-btn-row">
 					<a href="
@@ -2909,9 +3073,25 @@ function dc_gi_render_page(): void {
 					<?php wp_nonce_field( 'dc_gi_save' ); ?>
 					<input type="hidden" name="action" value="dc_gi_save">
 					<input type="hidden" name="auto_submit" value="1">
+					<input type="hidden" name="auto_delete" value="1">
 					<input type="hidden" name="daily_quota" value="200">
 					<input type="hidden" name="post_types[]" value="post">
 					<input type="hidden" name="post_types[]" value="page">
+					<label for="dc-gi-search-console-property" style="font-weight:600;display:block;margin-bottom:6px">
+						<?php esc_html_e( 'Search Console property', 'dc-google-indexing' ); ?>
+					</label>
+					<input
+						type="text"
+						id="dc-gi-search-console-property"
+						name="search_console_property"
+						class="regular-text code"
+						value="<?php echo esc_attr( $property ); ?>"
+						placeholder="https://example.com/ or sc-domain:example.com"
+						style="margin-bottom:12px;max-width:560px"
+					>
+					<p class="description" style="margin-top:0;margin-bottom:12px">
+						<?php esc_html_e( 'Use the exact property from Search Console. URL-prefix properties should end with a slash. Domain properties should use the sc-domain:example.com format.', 'dc-google-indexing' ); ?>
+					</p>
 					<label for="dc-gi-json-input" style="font-weight:600;display:block;margin-bottom:6px">
 						<?php esc_html_e( 'Paste your JSON key file contents here:', 'dc-google-indexing' ); ?>
 					</label>
@@ -2925,9 +3105,9 @@ function dc_gi_render_page(): void {
 					<div id="dc-gi-json-feedback"></div>
 					<div class="dc-gi-btn-row">
 						<button type="submit" class="button button-primary button-large">
-							<?php esc_html_e( '🔗 Save & Connect', 'dc-google-indexing' ); ?>
+							<?php esc_html_e( 'Save Settings', 'dc-google-indexing' ); ?>
 						</button>
-						<span style="color:#888;font-size:13px"><?php esc_html_e( 'The plugin will validate your JSON and verify the connection.', 'dc-google-indexing' ); ?></span>
+						<span style="color:#888;font-size:13px"><?php esc_html_e( 'The plugin validates the JSON on save. Run the connection test right after saving to verify property access.', 'dc-google-indexing' ); ?></span>
 					</div>
 				</form>
 
@@ -2984,6 +3164,24 @@ function dc_gi_render_page(): void {
 					</td>
 				</tr>
 				<tr>
+					<th scope="row">
+						<label for="search_console_property"><?php esc_html_e( 'Search Console Property', 'dc-google-indexing' ); ?></label>
+					</th>
+					<td>
+						<input
+							type="text"
+							id="search_console_property"
+							name="search_console_property"
+							class="regular-text code"
+							value="<?php echo esc_attr( $property ); ?>"
+							placeholder="https://example.com/ or sc-domain:example.com"
+						>
+						<p class="description">
+							<?php esc_html_e( 'Use the exact property string from Search Console. This is the property the URL Inspection API will use for coverage checks.', 'dc-google-indexing' ); ?>
+						</p>
+					</td>
+				</tr>
+				<tr>
 					<th scope="row"><?php esc_html_e( 'Auto-submit on Publish', 'dc-google-indexing' ); ?></th>
 					<td>
 						<label>
@@ -3035,18 +3233,6 @@ function dc_gi_render_page(): void {
 						</p>
 					</td>
 				</tr>
-				<tr>
-					<th scope="row"><?php esc_html_e( 'Footer Credit', 'dc-google-indexing' ); ?></th>
-					<td>
-						<label>
-							<input type="checkbox" name="footer_credit" value="1" <?php checked( ! empty( $settings['footer_credit'] ) ); ?>>
-							<?php esc_html_e( 'Show some love and support development by adding a small link in the footer', 'dc-google-indexing' ); ?>
-						</label>
-						<p class="description">
-							<?php echo wp_kses_post( __( 'Inserts a discreet <a href="https://www.dampcig.dk" target="_blank" rel="noopener">Dampcig.dk</a> link in the footer by linking the copyright symbol &copy;. Does nothing if your theme has no &copy; in the footer.', 'dc-google-indexing' ) ); ?>
-						</p>
-					</td>
-				</tr>
 			</table>
 			<?php submit_button( __( 'Save Settings', 'dc-google-indexing' ) ); ?>
 		</form>
@@ -3059,13 +3245,64 @@ function dc_gi_render_page(): void {
 			<input type="hidden" name="action" value="dc_gi_test">
 			<p>
 				<button type="submit" class="button">
-					<?php esc_html_e( 'Test credentials', 'dc-google-indexing' ); ?>
+					<?php esc_html_e( 'Run connection test', 'dc-google-indexing' ); ?>
 				</button>
 				<span class="description" style="margin-left:8px">
-					<?php esc_html_e( 'Attempts to obtain a Google access token — no URL is submitted.', 'dc-google-indexing' ); ?>
+					<?php esc_html_e( 'Checks Indexing API auth, Search Console auth, and whether the selected property is actually accessible to the service account.', 'dc-google-indexing' ); ?>
 				</span>
 			</p>
 		</form>
+
+			<?php if ( ! empty( $connection_test['checked_at'] ) ) : ?>
+		<div class="dc-gi-live-panel" style="max-width:860px;margin-top:18px">
+			<h3 style="margin-top:0"><?php esc_html_e( 'Latest Connection Report', 'dc-google-indexing' ); ?></h3>
+			<p style="font-size:12px;color:#7a8499;margin-top:-6px">
+				<?php
+				printf(
+					/* translators: %s: localized date and time */
+					esc_html__( 'Last checked: %s', 'dc-google-indexing' ),
+					esc_html( wp_date( 'Y-m-d H:i:s', (int) $connection_test['checked_at'] ) )
+				);
+				?>
+			</p>
+			<div class="dc-gi-grid-3" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+				<div class="dc-gi-callout <?php echo ! empty( $connection_test['indexing_api']['ok'] ) ? 'ok' : 'err'; ?>" style="margin:0">
+					<strong><?php esc_html_e( 'Indexing API', 'dc-google-indexing' ); ?></strong><br>
+					<?php echo esc_html( (string) ( $connection_test['indexing_api']['message'] ?? '' ) ); ?>
+				</div>
+				<div class="dc-gi-callout <?php echo ! empty( $connection_test['inspection_api']['ok'] ) ? 'ok' : 'err'; ?>" style="margin:0">
+					<strong><?php esc_html_e( 'Search Console API', 'dc-google-indexing' ); ?></strong><br>
+					<?php echo esc_html( (string) ( $connection_test['inspection_api']['message'] ?? '' ) ); ?>
+				</div>
+				<div class="dc-gi-callout <?php echo ! empty( $connection_test['property_access']['ok'] ) ? 'ok' : 'warn'; ?>" style="margin:0">
+					<strong><?php esc_html_e( 'Property Access', 'dc-google-indexing' ); ?></strong><br>
+					<?php echo esc_html( (string) ( $connection_test['property_access']['message'] ?? '' ) ); ?>
+				</div>
+			</div>
+
+				<?php if ( ! empty( $connection_test['properties'] ) ) : ?>
+			<h4 style="margin-bottom:8px"><?php esc_html_e( 'Accessible Search Console Properties', 'dc-google-indexing' ); ?></h4>
+			<div style="max-height:220px;overflow:auto;border:1px solid #2d3555;border-radius:6px">
+				<table class="widefat striped" style="margin:0">
+					<thead>
+						<tr>
+							<th><?php esc_html_e( 'Property', 'dc-google-indexing' ); ?></th>
+							<th style="width:170px"><?php esc_html_e( 'Permission', 'dc-google-indexing' ); ?></th>
+						</tr>
+					</thead>
+					<tbody>
+						<?php foreach ( (array) $connection_test['properties'] as $api_property ) : ?>
+						<tr>
+							<td><code><?php echo esc_html( (string) ( $api_property['siteUrl'] ?? '' ) ); ?></code></td>
+							<td><?php echo esc_html( (string) ( $api_property['permissionLevel'] ?? '' ) ); ?></td>
+						</tr>
+						<?php endforeach; ?>
+					</tbody>
+				</table>
+			</div>
+			<?php endif; ?>
+		</div>
+		<?php endif; ?>
 
 		<hr style="margin:20px 0">
 
@@ -3415,7 +3652,7 @@ function dc_gi_render_page(): void {
 				sprintf(
 				/* translators: %s: URL to site home */
 					__( 'Site URL detected: <code>%s</code>. This must match your Search Console property.', 'dc-google-indexing' ),
-					esc_html( trailingslashit( get_home_url() ) )
+					esc_html( dc_gi_get_search_console_property( $settings ) )
 				)
 			);
 			?>
@@ -3978,6 +4215,90 @@ function dc_gi_render_page(): void {
 
 		<!-- ===== INDEX STATUS ===== -->
 
+			<?php if ( $inspect_url ) : ?>
+		<div class="dc-gi-live-panel" style="max-width:980px;margin-bottom:22px">
+			<h2 style="margin-top:0"><?php esc_html_e( 'URL Inspection Detail', 'dc-google-indexing' ); ?></h2>
+			<p style="font-size:12px;color:#7a8499;word-break:break-all"><code><?php echo esc_html( $inspect_url ); ?></code></p>
+
+				<?php if ( ! $inspect_entry ) : ?>
+			<div class="dc-gi-callout warn">
+					<?php echo esc_html( $inspect_error ); ?>
+			</div>
+			<?php else : ?>
+			<div class="dc-gi-grid-3" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+				<div class="dc-gi-callout info" style="margin:0">
+					<strong><?php esc_html_e( 'Index Verdict', 'dc-google-indexing' ); ?></strong><br>
+					<?php echo esc_html( (string) ( $inspect_entry['index_verdict'] ?? '—' ) ); ?>
+				</div>
+				<div class="dc-gi-callout info" style="margin:0">
+					<strong><?php esc_html_e( 'Coverage State', 'dc-google-indexing' ); ?></strong><br>
+					<?php echo esc_html( (string) ( $inspect_entry['coverage_state'] ?? '—' ) ); ?>
+				</div>
+				<div class="dc-gi-callout info" style="margin:0">
+					<strong><?php esc_html_e( 'Search Console Property', 'dc-google-indexing' ); ?></strong><br>
+					<code><?php echo esc_html( $property ); ?></code>
+				</div>
+			</div>
+
+				<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 24px;margin-top:14px;font-size:13px">
+					<div><strong><?php esc_html_e( 'Page Fetch', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( ! empty( $inspect_entry['page_fetch_state'] ) ? (string) $inspect_entry['page_fetch_state'] : '—' ); ?></div>
+					<div><strong><?php esc_html_e( 'Indexing State', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( ! empty( $inspect_entry['indexing_state'] ) ? (string) $inspect_entry['indexing_state'] : '—' ); ?></div>
+					<div><strong><?php esc_html_e( 'Robots.txt', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( ! empty( $inspect_entry['robots_txt_state'] ) ? (string) $inspect_entry['robots_txt_state'] : '—' ); ?></div>
+					<div><strong><?php esc_html_e( 'Crawled As', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( ! empty( $inspect_entry['crawled_as'] ) ? (string) $inspect_entry['crawled_as'] : '—' ); ?></div>
+				<div><strong><?php esc_html_e( 'Last Crawl', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( ! empty( $inspect_entry['last_crawl_time'] ) ? (string) $inspect_entry['last_crawl_time'] : '—' ); ?></div>
+				<div><strong><?php esc_html_e( 'Last Inspected', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( ! empty( $inspect_entry['last_inspected'] ) ? (string) $inspect_entry['last_inspected'] : '—' ); ?></div>
+					<div><strong><?php esc_html_e( 'Google Canonical', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( ! empty( $inspect_entry['google_canonical'] ) ? (string) $inspect_entry['google_canonical'] : '—' ); ?></div>
+					<div><strong><?php esc_html_e( 'User Canonical', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( ! empty( $inspect_entry['user_canonical'] ) ? (string) $inspect_entry['user_canonical'] : '—' ); ?></div>
+				<div><strong><?php esc_html_e( 'Last Submitted', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( ! empty( $inspect_entry['last_submitted'] ) ? (string) $inspect_entry['last_submitted'] : '—' ); ?></div>
+			</div>
+
+				<?php if ( ! empty( $inspect_entry['rich_results'] ) ) : ?>
+					<?php $rich_results = json_decode( (string) $inspect_entry['rich_results'], true ); ?>
+					<?php if ( is_array( $rich_results ) && ! empty( $rich_results ) ) : ?>
+				<h3 style="margin-bottom:8px"><?php esc_html_e( 'Rich Results', 'dc-google-indexing' ); ?></h3>
+				<div class="dc-gi-callout info">
+						<?php foreach ( $rich_results as $rich_item ) : ?>
+					<div style="margin-bottom:10px">
+						<strong><?php echo esc_html( (string) ( $rich_item['t'] ?? '' ) ); ?></strong>
+							<?php foreach ( (array) ( $rich_item['i'] ?? [] ) as $rich_child ) : ?>
+						<div style="margin-top:4px">
+								<?php echo esc_html( (string) ( $rich_child['n'] ?? '' ) ); ?>
+								<?php foreach ( (array) ( $rich_child['i'] ?? [] ) as $rich_issue ) : ?>
+							<div style="font-size:12px;color:#ff8d72">
+									<?php echo esc_html( (string) ( $rich_issue['m'] ?? '' ) ); ?>
+									<?php if ( ! empty( $rich_issue['s'] ) ) : ?>
+									(<?php echo esc_html( (string) $rich_issue['s'] ); ?>)
+								<?php endif; ?>
+							</div>
+							<?php endforeach; ?>
+						</div>
+						<?php endforeach; ?>
+					</div>
+					<?php endforeach; ?>
+				</div>
+				<?php endif; ?>
+			<?php endif; ?>
+
+			<h3 style="margin-bottom:8px"><?php esc_html_e( 'Indexing API Metadata', 'dc-google-indexing' ); ?></h3>
+				<?php if ( $inspect_meta ) : ?>
+			<div class="dc-gi-callout ok">
+				<div><strong><?php esc_html_e( 'Latest update notification', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( (string) ( $inspect_meta['latestUpdate']['notifyTime'] ?? '—' ) ); ?></div>
+				<div><strong><?php esc_html_e( 'Latest update type', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( (string) ( $inspect_meta['latestUpdate']['type'] ?? '—' ) ); ?></div>
+				<div><strong><?php esc_html_e( 'Latest removal notification', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( (string) ( $inspect_meta['latestRemove']['notifyTime'] ?? '—' ) ); ?></div>
+			</div>
+			<?php elseif ( $inspect_error ) : ?>
+			<div class="dc-gi-callout warn">
+				<?php echo esc_html( $inspect_error ); ?>
+			</div>
+			<?php else : ?>
+			<div class="dc-gi-callout info">
+				<?php esc_html_e( 'No Indexing API metadata is available for this URL yet.', 'dc-google-indexing' ); ?>
+			</div>
+			<?php endif; ?>
+			<?php endif; ?>
+		</div>
+		<?php endif; ?>
+
 		<h2 style="margin-top:0"><?php esc_html_e( 'Index Status Overview', 'dc-google-indexing' ); ?></h2>
 		<p style="color:#8892a4;max-width:720px;font-size:13px;margin-bottom:20px"><?php esc_html_e( 'Live snapshot of all URLs in the inspection cache, grouped by coverage state and index verdict. The stat cards auto-refresh every 30 seconds.', 'dc-google-indexing' ); ?></p>
 
@@ -4239,6 +4560,19 @@ function dc_gi_render_page(): void {
 			'use strict';
 			var nonce   = <?php echo wp_json_encode( wp_create_nonce( 'dc_gi_ajax' ) ); ?>;
 			var ajaxUrl = <?php echo wp_json_encode( admin_url( 'admin-ajax.php' ) ); ?>;
+			var inspectBaseUrl = 
+			<?php
+			echo wp_json_encode(
+				add_query_arg(
+					[
+						'page' => 'dc-google-indexing',
+						'tab'  => 'index_status',
+					],
+					admin_url( 'admin.php' )
+				)
+			);
+			?>
+									;
 			var timer   = null;
 			var isPage  = 1;
 			var isFilter = '';
@@ -4377,6 +4711,12 @@ function dc_gi_render_page(): void {
 				if ( rr ) {
 					html += '<div style="grid-column:1/-1"><span style="color:#7a8499;font-weight:600"><?php echo esc_js( __( 'Rich Results', 'dc-google-indexing' ) ); ?></span>' + rr + '</div>';
 				}
+				html += '<div style="grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">'
+					+ '<a class="button button-small" href="' + inspectBaseUrl + '&inspect_url=' + encodeURIComponent( row.url ) + '"><?php echo esc_js( __( 'Inspect', 'dc-google-indexing' ) ); ?></a>';
+				if ( 'PASS' !== row.index_verdict ) {
+					html += '<button type="button" class="button button-small dc-gi-is-resubmit-btn" data-url="' + esc( row.url ) + '"><?php echo esc_js( __( 'Re-submit', 'dc-google-indexing' ) ); ?></button>';
+				}
+				html += '</div>';
 
 				html += '</div></td></tr>';
 				return html;
@@ -4395,7 +4735,7 @@ function dc_gi_render_page(): void {
 						var badge  = verdictBadge[ row.index_verdict ] || '<span style="color:#7a8499">' + esc( row.index_verdict ) + '</span>';
 						var url    = row.url || '';
 						var urlDisp = url.replace( /^https?:\/\/[^\/]+/, '' ) || url;
-						var hasDetail = !!(row.robots_txt_state || row.indexing_state || row.google_canonical || row.rich_results || row.crawled_as);
+						var hasDetail = true;
 						html += '<tr class="dc-gi-is-data-row" data-idx="' + (offset+i) + '" style="cursor:' + (hasDetail ? 'pointer' : 'default') + '">';
 						html += '<td style="color:#7a8499;font-size:12px">' + ( offset + i + 1 ) + '</td>';
 						html += '<td style="overflow:hidden"><a href="' + esc( url ) + '" target="_blank" rel="noopener noreferrer" style="color:#6ab0f5;font-size:12px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc( url ) + '">' + esc( urlDisp ) + '</a></td>';
@@ -4412,7 +4752,7 @@ function dc_gi_render_page(): void {
 					// Wire expand/collapse.
 					tbody.querySelectorAll( '.dc-gi-is-data-row' ).forEach( function(tr) {
 						tr.addEventListener( 'click', function(e) {
-							if ( e.target.tagName === 'A' ) { return; }
+							if ( e.target.tagName === 'A' || e.target.tagName === 'BUTTON' ) { return; }
 							var idx     = tr.getAttribute( 'data-idx' );
 							var detail  = tbody.querySelector( '.dc-gi-is-detail-row[data-idx="' + idx + '"]' );
 							if ( ! detail ) { return; }
@@ -4420,6 +4760,41 @@ function dc_gi_render_page(): void {
 							detail.style.display = open ? '' : 'none';
 							var icon = tr.querySelector( 'td:last-child span' );
 							if ( icon ) { icon.textContent = open ? '⌃' : '⌄'; }
+						} );
+					} );
+
+					tbody.querySelectorAll( '.dc-gi-is-resubmit-btn' ).forEach( function(btn) {
+						btn.addEventListener( 'click', function(e) {
+							e.preventDefault();
+							e.stopPropagation();
+							var url = btn.getAttribute( 'data-url' ) || '';
+							if ( ! url ) { return; }
+							btn.disabled = true;
+							btn.textContent = '<?php echo esc_js( __( 'Queueing…', 'dc-google-indexing' ) ); ?>';
+							jQuery.post( ajaxUrl, {
+								action: 'dc_gi_watch_resubmit_one',
+								nonce: nonce,
+								url: url
+							}, function(resp) {
+								if ( ! resp || ! resp.success ) {
+									window.alert( '<?php echo esc_js( __( 'Could not re-submit this URL.', 'dc-google-indexing' ) ); ?>' );
+									btn.disabled = false;
+									btn.textContent = '<?php echo esc_js( __( 'Re-submit', 'dc-google-indexing' ) ); ?>';
+									return;
+								}
+								btn.textContent = '<?php echo esc_js( __( 'Queued', 'dc-google-indexing' ) ); ?>';
+								var queueCount = resp.data && resp.data.queue_count ? resp.data.queue_count : null;
+								if ( null !== queueCount ) {
+									var headerQueue = document.getElementById( 'dc-gi-header-queue' );
+									if ( headerQueue ) { headerQueue.textContent = queueCount; }
+									var bodyQueue = document.getElementById( 'dc-gi-queue-body-count' );
+									if ( bodyQueue ) { bodyQueue.textContent = queueCount; }
+								}
+							} ).fail( function() {
+								window.alert( '<?php echo esc_js( __( 'Could not re-submit this URL.', 'dc-google-indexing' ) ); ?>' );
+								btn.disabled = false;
+								btn.textContent = '<?php echo esc_js( __( 'Re-submit', 'dc-google-indexing' ) ); ?>';
+							} );
 						} );
 					} );
 				}

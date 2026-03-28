@@ -622,4 +622,120 @@ class DC_GI_JWT {
 		set_transient( 'dc_gi_quota_limits', $result, HOUR_IN_SECONDS );
 		return $result;
 	}
+
+	/**
+	 * Fetch the Search Console properties the service account can access.
+	 *
+	 * @param array $sa Decoded service account JSON.
+	 * @return array<int,array{siteUrl:string,permissionLevel:string}>|WP_Error
+	 */
+	public static function list_search_console_properties( array $sa ) {
+		$token = self::get_inspection_token( $sa );
+		if ( is_wp_error( $token ) ) {
+			return $token;
+		}
+
+		$response = wp_remote_get(
+			'https://www.googleapis.com/webmasters/v3/sites',
+			[
+				'headers' => [
+					'Authorization' => 'Bearer ' . $token,
+				],
+				'timeout' => 15,
+			]
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+
+		$code = (int) wp_remote_retrieve_response_code( $response );
+		$body = json_decode( wp_remote_retrieve_body( $response ), true );
+
+		if ( 200 !== $code ) {
+			$msg = $body['error']['message']
+				?? sprintf(
+					/* translators: %d: HTTP response code from Search Console Sites API */
+					__( 'Search Console Sites API returned HTTP %d.', 'dc-google-indexing' ),
+					$code
+				);
+			if ( 401 === $code ) {
+				delete_transient( 'dc_gi_inspection_token' );
+			}
+			return new WP_Error( 'dc_gi_sites_error', $msg, [ 'status' => $code ] );
+		}
+
+		$properties = [];
+		foreach ( (array) ( $body['siteEntry'] ?? [] ) as $site ) {
+			$site_url = (string) ( $site['siteUrl'] ?? '' );
+			if ( '' === $site_url ) {
+				continue;
+			}
+			$properties[] = [
+				'siteUrl'         => $site_url,
+				'permissionLevel' => (string) ( $site['permissionLevel'] ?? '' ),
+			];
+		}
+
+		return $properties;
+	}
+
+	/**
+	 * Fetch Indexing API metadata for a single URL.
+	 *
+	 * This exposes Google's latest submitted update/remove notifications for the
+	 * URL without creating a new publish request.
+	 *
+	 * @param array  $sa  Decoded service account JSON.
+	 * @param string $url Fully qualified URL.
+	 * @return array|WP_Error
+	 */
+	public static function get_url_notification_metadata( array $sa, string $url ) {
+		$token = self::get_access_token( $sa );
+		if ( is_wp_error( $token ) ) {
+			return $token;
+		}
+
+		$response = wp_remote_get(
+			add_query_arg(
+				'url',
+				$url,
+				'https://indexing.googleapis.com/v3/urlNotifications/metadata'
+			),
+			[
+				'headers' => [
+					'Authorization' => 'Bearer ' . $token,
+				],
+				'timeout' => 15,
+			]
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+
+		$code = (int) wp_remote_retrieve_response_code( $response );
+		$body = json_decode( wp_remote_retrieve_body( $response ), true );
+
+		if ( 200 !== $code ) {
+			$msg = $body['error']['message']
+				?? sprintf(
+					/* translators: %d: HTTP response code from Google Indexing API metadata endpoint */
+					__( 'URL metadata endpoint returned HTTP %d.', 'dc-google-indexing' ),
+					$code
+				);
+			if ( 401 === $code ) {
+				delete_transient( 'dc_gi_access_token' );
+			}
+			if ( 403 === $code && false !== stripos( $msg, 'URL ownership' ) ) {
+				$msg = __(
+					'Permission denied: service account lacks Owner permission. In Search Console → Settings → Users and permissions, remove the service account and re-add it with "Owner" permission (not "Full" or "Restricted").',
+					'dc-google-indexing'
+				);
+			}
+			return new WP_Error( 'dc_gi_metadata_error', $msg, [ 'status' => $code ] );
+		}
+
+		return (array) $body;
+	}
 }

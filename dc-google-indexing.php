@@ -6,7 +6,7 @@
  * Plugin Name: DC Google Indexing
  * Plugin URI:  https://github.com/dc-plugins/dc-google-indexing
  * Description: Submit URLs to Google's Web Search Indexing API for instant crawling. Supports manual batch submission and automatic submission on publish/update.
- * Version:     1.1.0
+ * Version:     1.2.0
  * Author:      lennilg
  * Author URI:  https://www.dampcig.dk
  * License:     GPL-2.0+
@@ -21,7 +21,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'DC_GI_VERSION', '1.1.0' );
+define( 'DC_GI_VERSION', '1.2.0' );
 define( 'DC_GI_DB_VERSION', '1.2.0' ); // Increment when the URL-cache table schema changes.
 define( 'DC_GI_FILE', __FILE__ );
 define( 'DC_GI_DIR', plugin_dir_path( __FILE__ ) );
@@ -487,7 +487,7 @@ function dc_gi_run_watchlist_check(): void {
 	// still update coverage states so the watchlist stays current.
 	$quota_ok = ! dc_gi_is_quota_exhausted();
 
-	$site_url     = trailingslashit( get_home_url() );
+	$site_url     = dc_gi_get_search_console_property( $settings );
 	$list         = get_option( 'dc_gi_watchlist', [] );
 	$updated      = false;
 	$checked      = 0;
@@ -794,6 +794,55 @@ function dc_gi_get_settings(): array {
 }
 
 /**
+ * Normalize a Search Console property string for storage and API calls.
+ *
+ * Accepts either a URL-prefix property (https://example.com/) or a domain
+ * property (sc-domain:example.com). Falls back to an empty string when the
+ * value cannot be normalized safely.
+ *
+ * @param string $value Raw property value from user input or saved settings.
+ * @return string
+ */
+function dc_gi_normalize_search_console_property( string $value ): string {
+	$value = trim( $value );
+	if ( '' === $value ) {
+		return '';
+	}
+
+	if ( 0 === strpos( $value, 'sc-domain:' ) ) {
+		$domain = strtolower( trim( substr( $value, strlen( 'sc-domain:' ) ) ) );
+		$domain = preg_replace( '/[^a-z0-9.-]/', '', $domain );
+		return $domain ? 'sc-domain:' . $domain : '';
+	}
+
+	$url = esc_url_raw( $value, [ 'http', 'https' ] );
+	if ( ! $url ) {
+		return '';
+	}
+
+	return trailingslashit( $url );
+}
+
+/**
+ * Return the configured Search Console property, or fall back to the site URL.
+ *
+ * @param array|null $settings Optional settings array to avoid re-loading options.
+ * @return string
+ */
+function dc_gi_get_search_console_property( ?array $settings = null ): string {
+	if ( null === $settings ) {
+		$settings = dc_gi_get_settings();
+	}
+
+	$stored = dc_gi_normalize_search_console_property( (string) ( $settings['search_console_property'] ?? '' ) );
+	if ( '' !== $stored ) {
+		return $stored;
+	}
+
+	return trailingslashit( get_home_url() );
+}
+
+/**
  * Reliably write dc_gi_poll_active — update_option silently fails if the row doesn't exist.
  *
  * @param bool $active True to activate polling, false to deactivate.
@@ -837,71 +886,6 @@ function dc_gi_is_quota_exhausted(): bool {
 	$settings = dc_gi_get_settings();
 	$limit    = min( DC_GI_DAILY_CAP, (int) ( $settings['daily_quota'] ?? DC_GI_DAILY_CAP ) );
 	return dc_gi_get_quota_used() >= $limit;
-}
-
-// =============================================================================
-// ACTIVATION / DEACTIVATION
-// =============================================================================
-
-// =============================================================================
-// FOOTER CREDIT
-// Injects a tiny inline script via wp_footer that uses a DOM TreeWalker to find
-// the first © text node inside <footer> and wraps it with a link to dampcig.dk.
-//
-// Only registered when the checkbox is enabled. Defines the sentinel function
-// dc_footer_credit_owner() on registration — if another plugin already defined
-// it (its checkbox was also ticked and it loaded first), this block is silently
-// skipped so only one plugin ever owns the footer credit.
-// =============================================================================
-
-$dc_gi_settings = dc_gi_get_settings();
-if ( ! empty( $dc_gi_settings['footer_credit'] ) && ! function_exists( 'dc_footer_credit_owner' ) ) {
-	/**
-	 * Sentinel: marks this plugin as the active footer-credit owner.
-	 * Other DC plugins check function_exists( 'dc_footer_credit_owner' ) and skip
-	 * their own registration when this is already defined.
-	 */
-	function dc_footer_credit_owner(): void {}
-
-	add_action( 'wp_footer', 'dc_gi_footer_credit_js', PHP_INT_MAX );
-}
-unset( $dc_gi_settings );
-
-/**
- * Output a tiny inline TreeWalker script that wraps the first © text node
- * inside <footer> with a link to dampcig.dk.
- */
-function dc_gi_footer_credit_js(): void {
-	if ( is_admin() ) {
-		return;
-	}
-	$url   = 'https://www.dampcig.dk';
-	$title = esc_js( 'Powered by Dampcig.dk' );
-	?>
-<script>(function(){
-var f=document.querySelector('footer');
-if(!f)return;
-var w=document.createTreeWalker(f,NodeFilter.SHOW_TEXT,null,false);
-var node;
-while((node=w.nextNode())){
-	if(node.nodeValue.indexOf('\u00A9')===-1)continue;
-	var idx=node.nodeValue.indexOf('\u00A9');
-	var frag=document.createDocumentFragment();
-	if(idx>0)frag.appendChild(document.createTextNode(node.nodeValue.slice(0,idx)));
-	var a=document.createElement('a');
-	a.href=<?php echo wp_json_encode( $url ); ?>;
-	a.title=<?php echo wp_json_encode( $title ); ?>;
-	a.target='_blank';
-	a.rel='noopener noreferrer';
-	a.textContent='\u00A9';
-	frag.appendChild(a);
-	var rest=node.nodeValue.slice(idx+1);
-	if(rest)frag.appendChild(document.createTextNode(rest));
-	node.parentNode.replaceChild(frag,node);
-	break;
-}
-})();</script>
-	<?php
 }
 
 // =============================================================================
@@ -994,7 +978,7 @@ function dc_gi_run_watch_check_one_cron(): void {
 	}
 
 	$offset   = (int) get_option( 'dc_gi_watch_offset', 0 );
-	$site_url = trailingslashit( get_home_url() );
+	$site_url = dc_gi_get_search_console_property( $settings );
 	$list     = get_option( 'dc_gi_watchlist', [] );
 	$keys     = array_keys( $list );
 	$total    = count( $keys );
