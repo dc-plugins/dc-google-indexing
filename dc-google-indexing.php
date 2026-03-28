@@ -630,8 +630,9 @@ function dc_gi_run_poll_batch( bool $force = false ): string {
 		$poll_seen_initial = $poll_seen; // Snapshot to detect mid-batch resets.
 		$skip_urls         = array_values( array_unique( array_merge( $watched_urls, $poll_seen ) ) );
 
-		// Up to 50 URLs per batch — no per-URL API calls, so quota is not a concern here.
-		$batch_size = 50;
+		// Up to 5 URLs per batch — keeps each run small so the cron processes URLs incrementally
+		// and the interactive long-poll session stays within PHP's execution time budget.
+		$batch_size = 5;
 		$candidates = DC_GI_URL_Cache::get_excluded_urls( $batch_size, $skip_urls );
 
 		if ( empty( $candidates ) ) {
