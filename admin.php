@@ -79,6 +79,7 @@ add_action( 'wp_ajax_dc_gi_qa_stop', 'dc_gi_ajax_qa_stop' );
 add_action( 'admin_post_dc_gi_qa_clear', 'dc_gi_handle_qa_clear' );
 add_action( 'wp_ajax_dc_gi_index_status', 'dc_gi_ajax_index_status' );
 add_action( 'wp_ajax_dc_gi_is_urls', 'dc_gi_ajax_is_urls' );
+add_action( 'wp_ajax_dc_gi_quota_metrics', 'dc_gi_ajax_quota_metrics' );
 add_action( 'admin_enqueue_scripts', 'dc_gi_enqueue_scripts' );
 /**
  * Enqueue admin scripts and localized data for the plugin's admin page.
@@ -119,6 +120,16 @@ function dc_gi_enqueue_scripts( string $hook ): void {
 				'qaRunning'      => __( '● Scanning…', 'dc-google-indexing' ),
 				'qaStopped'      => __( '○ Stopped', 'dc-google-indexing' ),
 				'qaDone'         => __( '✅ Scan complete', 'dc-google-indexing' ),
+				// Quota panel.
+				'quotaLoading'   => __( 'Loading…', 'dc-google-indexing' ),
+				'quotaError'     => __( 'Error loading quota data.', 'dc-google-indexing' ),
+				'quotaMetric'    => __( 'Quota', 'dc-google-indexing' ),
+				'quotaLimit'     => __( 'Limit', 'dc-google-indexing' ),
+				'quotaUsed'      => __( 'Used today', 'dc-google-indexing' ),
+				'quotaUsage'     => __( 'Usage', 'dc-google-indexing' ),
+				'quotaFetched'   => __( 'Fetched from API:', 'dc-google-indexing' ),
+				'quotaPerDay'    => __( '/day', 'dc-google-indexing' ),
+				'quotaPerMin'    => __( '/min', 'dc-google-indexing' ),
 			],
 		]
 	);
@@ -515,6 +526,78 @@ function dc_gi_poll_js(): string {
 				}
 			});
 
+		// ── Quota metrics panel ───────────────────────────────────────────────
+
+		var quotaPanelOpen = false;
+
+		function escQ(s) {
+			return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+		}
+
+		function loadQuotaPanel(force) {
+			var body = document.getElementById('dc-gi-quota-body');
+			if (!body) { return; }
+			body.innerHTML = '<span style="color:#7a8499;font-size:12px">' + (dcGiPoll.i18n.quotaLoading||'Loading\u2026') + '</span>';
+			$.post(dcGiPoll.ajaxurl, { action:'dc_gi_quota_metrics', nonce:dcGiPoll.nonce, force: force ? '1' : '' }, function(r) {
+				if (!r||!r.success) {
+					body.innerHTML = '<span style="color:#fd5d93;font-size:12px">' + (dcGiPoll.i18n.quotaError||'Error loading quota data.') + '</span>';
+					return;
+				}
+				var d  = r.data;
+				var qs = d.quotas || [];
+				var html = '<table style="width:100%;border-collapse:collapse;font-size:12px">'
+					+ '<tr>'
+					+ '<th style="text-align:left;color:#7a8499;padding:4px 8px 8px 0">' + (dcGiPoll.i18n.quotaMetric||'Quota') + '</th>'
+					+ '<th style="text-align:right;color:#7a8499;padding:4px 8px 8px">' + (dcGiPoll.i18n.quotaLimit||'Limit') + '</th>'
+					+ '<th style="text-align:right;color:#7a8499;padding:4px 8px 8px">' + (dcGiPoll.i18n.quotaUsed||'Used today') + '</th>'
+					+ '<th style="min-width:160px;padding:4px 0 8px 8px;color:#7a8499">' + (dcGiPoll.i18n.quotaUsage||'Usage') + '</th>'
+					+ '</tr>';
+				qs.forEach(function(q) {
+					var unitLabel = q.unit.indexOf('/d/') !== -1 ? (dcGiPoll.i18n.quotaPerDay||'/day') : (dcGiPoll.i18n.quotaPerMin||'/min');
+					var usedStr   = q.used !== null ? q.used : '\u2014';
+					var pct       = q.pct  !== null ? q.pct  : null;
+					var barColor  = pct !== null && pct >= 90 ? '#fd5d93' : (pct !== null && pct >= 75 ? '#ff8d72' : '#00f2c3');
+					html += '<tr style="border-top:1px solid rgba(255,255,255,.06)">'
+						+ '<td style="color:#c8d0e0;padding:8px 8px 8px 0">' + escQ(q.displayName) + '<small style="color:#7a8499;margin-left:4px">' + unitLabel + '</small></td>'
+						+ '<td style="text-align:right;color:#c8d0e0;padding:8px">' + (q.limit||'\u2014') + '</td>'
+						+ '<td style="text-align:right;padding:8px;color:' + (pct !== null && pct >= 90 ? '#fd5d93' : '#c8d0e0') + '">' + usedStr + '</td>'
+						+ '<td style="padding:8px 0 8px 8px">';
+					if (pct !== null) {
+						html += '<div style="display:flex;align-items:center;gap:8px">'
+							+ '<div style="flex:1;background:rgba(255,255,255,.08);border-radius:4px;height:6px;overflow:hidden">'
+							+ '<div style="height:100%;width:' + Math.min(100, pct) + '%;background:' + barColor + ';border-radius:4px;transition:width .3s"></div>'
+							+ '</div>'
+							+ '<span style="font-size:11px;color:#7a8499;min-width:36px;text-align:right">' + pct + '%</span>'
+							+ '</div>';
+					} else {
+						html += '<span style="color:#7a8499">\u2014</span>';
+					}
+					html += '</td></tr>';
+				});
+				html += '</table>';
+				if (!qs.length && d.error) {
+					html += '<p style="color:#fd5d93;font-size:12px;margin:0">' + escQ(d.error) + '</p>';
+				} else if (d.error) {
+					html += '<p style="color:#ff8d72;font-size:11px;margin:8px 0 0">\u26a0\ufe0f ' + escQ(d.error) + '</p>';
+				}
+				body.innerHTML = html;
+				var ts = document.getElementById('dc-gi-quota-ts');
+				if (ts) { ts.textContent = (dcGiPoll.i18n.quotaFetched||'Fetched:') + ' ' + new Date().toLocaleTimeString(); }
+			});
+		}
+
+		var $quotaLink  = $('#dc-gi-quota-details-link');
+		var $quotaPanel = $('#dc-gi-quota-panel');
+		if ($quotaLink.length) {
+			$quotaLink.on('click', function(e) {
+				e.preventDefault();
+				quotaPanelOpen = !quotaPanelOpen;
+				$quotaPanel.toggle(quotaPanelOpen);
+				if (quotaPanelOpen) { loadQuotaPanel(false); }
+			});
+		}
+		$('#dc-gi-quota-reload').on('click', function() { loadQuotaPanel(true); });
+
 	});
 }(jQuery));
 JS;
@@ -661,10 +744,6 @@ function dc_gi_watch_check_js(): string {
 						$('#dc-gi-wcp-label').text('\u2705 Done \u2014 ' + d.checked + ' URLs checked.');
 						$('#dc-gi-wcp-bar').css('background','#00f2c3');
 						setBadgeDone();
-					} else if (d.inspect_quota_exhausted) {
-						$('#dc-gi-wcp-label').text('\u26a0\ufe0f Inspection quota exhausted \u2014 will resume tomorrow.');
-						setBadgeStopped();
-						$.post(dcGiPoll.ajaxurl, { action: 'dc_gi_watch_stop', nonce: dcGiPoll.nonce });
 					} else {
 						wcCheckOne(d.next);
 					}
@@ -1367,44 +1446,15 @@ function dc_gi_ajax_watch_check_one(): void {
 	$entry     = &$list[ $key ];
 	$entry_url = $entry['url'];
 
-	// The Inspection API has its own 2,000/day quota, separate from the submission quota.
-	// Stop early rather than storing an error entry that would pollute the watchlist.
-	if ( dc_gi_is_inspect_quota_exhausted() ) {
-		wp_send_json_success(
-			[
-				'done'                    => false,
-				'inspect_quota_exhausted' => true,
-				'checked'                 => $offset,
-				'total'                   => $total,
-				'next'                    => $offset,
-				'queue_count'             => count( (array) get_option( 'dc_gi_queue', [] ) ),
-			]
-		);
-	}
-
 	$result                = DC_GI_JWT::inspect_url( $sa, $entry_url, $site_url );
 	$entry['last_checked'] = time();
 
 	$auto_removed = false;
 
 	if ( is_wp_error( $result ) ) {
-		if ( 'dc_gi_inspect_quota_exceeded' === $result->get_error_code() ) {
-			// Quota hit mid-check — don't persist an error entry; tell JS to stop.
-			wp_send_json_success(
-				[
-					'done'                    => false,
-					'inspect_quota_exhausted' => true,
-					'checked'                 => $offset,
-					'total'                   => $total,
-					'next'                    => $offset,
-					'queue_count'             => count( (array) get_option( 'dc_gi_queue', [] ) ),
-				]
-			);
-		}
 		$entry['coverage'] = 'error: ' . $result->get_error_message();
 		$entry['status']   = 'error';
 	} else {
-		dc_gi_increment_inspect_quota();
 		$coverage          = $result['inspectionResult']['indexStatusResult']['coverageState'] ?? '';
 		$entry['coverage'] = $coverage;
 
@@ -2175,15 +2225,18 @@ function dc_gi_ajax_is_urls(): void {
 		wp_send_json_error( 'Forbidden', 403 );
 	}
 
-	$page    = max( 1, (int) ( $_POST['page'] ?? 1 ) );    // phpcs:ignore WordPress.Security.NonceVerification.Missing
-	$filter  = sanitize_text_field( wp_unslash( $_POST['filter'] ?? '' ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+	$page     = max( 1, (int) ( $_POST['page'] ?? 1 ) );    // phpcs:ignore WordPress.Security.NonceVerification.Missing
+	$filter   = sanitize_text_field( wp_unslash( $_POST['filter'] ?? '' ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+	$order_by = sanitize_text_field( wp_unslash( $_POST['order_by'] ?? 'last_inspected' ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+	$order    = 'ASC' === strtoupper( sanitize_text_field( wp_unslash( $_POST['order'] ?? 'DESC' ) ) ) ? 'ASC' : 'DESC'; // phpcs:ignore WordPress.Security.NonceVerification.Missing
+
 	$allowed = [ '', 'PASS', 'NEUTRAL', 'FAIL', 'VERDICT_UNSPECIFIED', 'EXCLUDED' ];
 	if ( ! in_array( $filter, $allowed, true ) ) {
 		$filter = '';
 	}
 
 	$per_page    = 25;
-	$rows        = DC_GI_URL_Cache::get_paginated_urls( $page, $per_page, $filter );
+	$rows        = DC_GI_URL_Cache::get_paginated_urls( $page, $per_page, $filter, $order_by, $order );
 	$total       = DC_GI_URL_Cache::count_filtered( $filter );
 	$total_pages = (int) ceil( max( 1, $total ) / $per_page );
 
@@ -2194,6 +2247,72 @@ function dc_gi_ajax_is_urls(): void {
 			'page'        => $page,
 			'per_page'    => $per_page,
 			'total_pages' => $total_pages,
+			'order_by'    => $order_by,
+			'order'       => $order,
+		]
+	);
+}
+
+/**
+ * AJAX: return real API quota limits from Google Service Usage API.
+ *
+ * Accepts an optional $_POST['force'] = '1' to bust the 1-hour transient cache.
+ *
+ * @return void
+ */
+function dc_gi_ajax_quota_metrics(): void {
+	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_send_json_error( 'Forbidden', 403 );
+	}
+
+	$settings = dc_gi_get_settings();
+	if ( empty( $settings['service_account_json'] ) ) {
+		wp_send_json_error( __( 'No service account configured.', 'dc-google-indexing' ) );
+	}
+
+	$sa = json_decode( wp_unslash( $settings['service_account_json'] ), true );
+	if ( ! is_array( $sa ) ) {
+		wp_send_json_error( __( 'Invalid service account JSON.', 'dc-google-indexing' ) );
+	}
+
+	// Allow a forced cache-bust.
+	if ( ! empty( $_POST['force'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Missing
+		delete_transient( 'dc_gi_quota_limits' );
+		delete_transient( 'dc_gi_cloud_token' );
+	}
+
+	$quotas       = DC_GI_JWT::get_service_quotas( $sa );
+	$publish_used = dc_gi_get_quota_used();
+
+	if ( is_wp_error( $quotas ) ) {
+		wp_send_json_success(
+			[
+				'quotas' => [],
+				'error'  => $quotas->get_error_message(),
+				'used'   => $publish_used,
+			]
+		);
+	}
+
+	$payload = [];
+	foreach ( $quotas as $q ) {
+		$used      = ( false !== strpos( $q['metric'], 'publish_requests' ) ) ? $publish_used : null;
+		$payload[] = [
+			'metric'      => $q['metric'],
+			'displayName' => $q['displayName'],
+			'unit'        => $q['unit'],
+			'limit'       => $q['limit'],
+			'used'        => $used,
+			'pct'         => ( null !== $used && $q['limit'] > 0 ) ? round( $used / $q['limit'] * 100, 1 ) : null,
+		];
+	}
+
+	wp_send_json_success(
+		[
+			'quotas' => $payload,
+			'error'  => null,
+			'used'   => $publish_used,
 		]
 	);
 }
@@ -2271,14 +2390,13 @@ function dc_gi_render_page(): void {
 	$settings = dc_gi_get_settings();
 	// Bypass Redis persistent object cache so the queue count is always fresh.
 	wp_cache_delete( 'dc_gi_queue', 'options' );
-	$queue              = get_option( 'dc_gi_queue', [] );
-	$log                = get_option( 'dc_gi_log', [] );
-	$watchlist          = dc_gi_watchlist_get();
-	$quota_used         = dc_gi_get_quota_used();
-	$quota_limit        = min( 200, (int) ( $settings['daily_quota'] ?? 200 ) );
-	$inspect_quota_used = dc_gi_get_inspect_quota_used();
-	$has_sa             = ! empty( $settings['service_account_json'] );
-	$sa_email           = '';
+	$queue       = get_option( 'dc_gi_queue', [] );
+	$log         = get_option( 'dc_gi_log', [] );
+	$watchlist   = dc_gi_watchlist_get();
+	$quota_used  = dc_gi_get_quota_used();
+	$quota_limit = min( 200, (int) ( $settings['daily_quota'] ?? 200 ) );
+	$has_sa      = ! empty( $settings['service_account_json'] );
+	$sa_email    = '';
 	if ( $has_sa ) {
 		$sa_decoded = json_decode( $settings['service_account_json'], true );
 		$sa_email   = $sa_decoded['client_email'] ?? '';
@@ -3224,16 +3342,6 @@ function dc_gi_render_page(): void {
 				<strong><?php esc_html_e( 'How it works', 'dc-google-indexing' ); ?></strong><br>
 				<?php esc_html_e( 'A background inspection cron crawls your sitemap 3 URLs/minute via the Google URL Inspection API and builds a local cache of index statuses. The poll loop reads this cache to find URLs that are not yet indexed and queues them for submission — without calling the Inspection API itself.', 'dc-google-indexing' ); ?>
 			</div>
-			<div class="dc-gi-callout warn">
-				<strong><?php esc_html_e( '⚠️ Inspection quota', 'dc-google-indexing' ); ?></strong><br>
-				<?php
-				printf(
-					/* translators: %d: Google's URL Inspection API hard cap per day */
-					esc_html__( 'The background inspection cron calls the Google URL Inspection API up to 3×/minute. Google hard-caps this at %d calls/day — the cron stops automatically when that limit is reached and resumes the next day. Only Indexing API submissions (200/day) count against the submission quota.', 'dc-google-indexing' ),
-					(int) DC_GI_INSPECT_DAILY_CAP
-				);
-				?>
-			</div>
 		</div>
 
 			<?php
@@ -3399,8 +3507,20 @@ function dc_gi_render_page(): void {
 			<p style="font-size:11px;color:#7a8499;margin:16px 0 0;padding-top:14px;border-top:1px solid rgba(45,53,85,.5)">
 				<?php esc_html_e( '50 URLs per batch · runs every 1 minute via WP-Cron · continues if you leave this page', 'dc-google-indexing' ); ?>&ensp;|&ensp;<?php esc_html_e( 'Queue:', 'dc-google-indexing' ); ?> <strong style="color:#c8d0e0" id="dc-gi-queue-count">—</strong>
 				&ensp;|&ensp;<?php esc_html_e( 'Indexing quota:', 'dc-google-indexing' ); ?> <strong style="color:<?php echo esc_attr( dc_gi_is_quota_exhausted() ? '#fd5d93' : '#c8d0e0' ); ?>" id="dc-gi-quota-live"><?php echo esc_html( $quota_used . ' / ' . $quota_limit ); ?></strong>
-				&ensp;|&ensp;<?php esc_html_e( 'Inspection quota:', 'dc-google-indexing' ); ?> <strong style="color:<?php echo esc_attr( dc_gi_is_inspect_quota_exhausted() ? '#fd5d93' : '#c8d0e0' ); ?>"><?php echo esc_html( $inspect_quota_used . ' / ' . DC_GI_INSPECT_DAILY_CAP ); ?></strong>
+				&ensp;|&ensp;<a href="#" id="dc-gi-quota-details-link" style="font-size:11px;color:#6ab0f5"><?php esc_html_e( 'View API quota limits →', 'dc-google-indexing' ); ?></a>
 			</p>
+
+			<!-- Quota metrics panel (hidden by default, shown on link click) -->
+			<div id="dc-gi-quota-panel" style="display:none;margin-top:14px;background:#1a1f38;border:1px solid #2a3055;border-radius:8px;padding:16px">
+				<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+					<span style="font-size:13px;font-weight:600;color:#c8d0e0"><?php esc_html_e( 'API Quota &amp; System Limits — Web Search Indexing API', 'dc-google-indexing' ); ?></span>
+					<button id="dc-gi-quota-reload" class="button dc-gi-btn-secondary" style="font-size:11px;padding:2px 10px">⟳ <?php esc_html_e( 'Refresh', 'dc-google-indexing' ); ?></button>
+				</div>
+				<div id="dc-gi-quota-body">
+					<span style="color:#7a8499;font-size:12px"><?php esc_html_e( 'Loading…', 'dc-google-indexing' ); ?></span>
+				</div>
+				<p id="dc-gi-quota-ts" style="font-size:11px;color:#7a8499;margin:10px 0 0"></p>
+			</div>
 		</div>
 
 		<?php endif; ?>
@@ -4059,16 +4179,26 @@ function dc_gi_render_page(): void {
 
 		<!-- URL table -->
 		<div style="overflow-x:auto;max-width:100%;margin-bottom:8px">
-			<table class="widefat striped" id="dc-gi-is-url-tbl" style="min-width:760px;table-layout:fixed">
+			<table class="widefat striped" id="dc-gi-is-url-tbl" style="min-width:880px;table-layout:fixed">
 				<thead>
 					<tr>
-						<th style="width:40px;color:#7a8499">#</th>
-						<th style="width:auto;min-width:260px;color:#c8d0e0"><?php esc_html_e( 'URL', 'dc-google-indexing' ); ?></th>
-						<th style="width:100px;color:#c8d0e0"><?php esc_html_e( 'Verdict', 'dc-google-indexing' ); ?></th>
-						<th style="width:240px;color:#c8d0e0"><?php esc_html_e( 'Coverage State', 'dc-google-indexing' ); ?></th>
-						<th style="width:130px;color:#c8d0e0"><?php esc_html_e( 'Page Fetch', 'dc-google-indexing' ); ?></th>
-						<th style="width:140px;color:#c8d0e0"><?php esc_html_e( 'Last Inspected', 'dc-google-indexing' ); ?></th>
-						<th style="width:130px;color:#c8d0e0"><?php esc_html_e( 'Last Submitted', 'dc-google-indexing' ); ?></th>
+						<th style="width:36px;color:#7a8499">#</th>
+						<th style="width:auto;min-width:240px;color:#c8d0e0;cursor:pointer" data-col="url">
+							<?php esc_html_e( 'URL', 'dc-google-indexing' ); ?> <span class="dc-gi-sort-icon" data-col="url"></span>
+						</th>
+						<th style="width:100px;color:#c8d0e0;cursor:pointer" data-col="index_verdict">
+							<?php esc_html_e( 'Verdict', 'dc-google-indexing' ); ?> <span class="dc-gi-sort-icon" data-col="index_verdict"></span>
+						</th>
+						<th style="width:220px;color:#c8d0e0;cursor:pointer" data-col="coverage_state">
+							<?php esc_html_e( 'Coverage State', 'dc-google-indexing' ); ?> <span class="dc-gi-sort-icon" data-col="coverage_state"></span>
+						</th>
+						<th style="width:120px;color:#c8d0e0;cursor:pointer" data-col="last_crawl_time">
+							<?php esc_html_e( 'Last Crawl', 'dc-google-indexing' ); ?> <span class="dc-gi-sort-icon" data-col="last_crawl_time">↕</span>
+						</th>
+						<th style="width:120px;color:#c8d0e0;cursor:pointer" data-col="last_inspected">
+							<?php esc_html_e( 'Inspected', 'dc-google-indexing' ); ?> <span class="dc-gi-sort-icon" data-col="last_inspected"></span>
+						</th>
+						<th style="width:32px;color:#7a8499"></th>
 					</tr>
 				</thead>
 				<tbody id="dc-gi-is-url-tbody">
@@ -4113,6 +4243,8 @@ function dc_gi_render_page(): void {
 			var isPage  = 1;
 			var isFilter = '';
 			var isTotalPages = 1;
+			var isOrderBy = 'last_crawl_time';
+			var isOrder   = 'DESC';
 
 			// Verdict → display badge HTML.
 			var verdictBadge = {
@@ -4132,7 +4264,7 @@ function dc_gi_render_page(): void {
 				return isNaN( d ) ? s : d.toLocaleDateString( undefined, { year:'numeric', month:'short', day:'numeric' } );
 			}
 
-			function fmtFetch( s ) {
+			function fmtState( s ) {
 				if ( ! s ) { return '—'; }
 				return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase().replace( /_/g, ' ' );
 			}
@@ -4142,19 +4274,112 @@ function dc_gi_render_page(): void {
 				if ( el ) { el.textContent = val; }
 			}
 
+			// ── Sort icon update ─────────────────────────────────────────────────
+
+			function updateSortIcons() {
+				document.querySelectorAll( '.dc-gi-sort-icon' ).forEach( function ( el ) {
+					var col = el.getAttribute( 'data-col' );
+					if ( col === isOrderBy ) {
+						el.textContent = 'ASC' === isOrder ? ' ↑' : ' ↓';
+					} else {
+						el.textContent = col ? ' ↕' : '';
+					}
+				} );
+			}
+
 			// ── Load URL table page ──────────────────────────────────────────────
 
-			function loadUrlTable( page, filter ) {
+			function loadUrlTable( page, filter, orderBy, order ) {
 				isPage   = page;
 				isFilter = filter;
+				if ( orderBy ) { isOrderBy = orderBy; }
+				if ( order   ) { isOrder   = order; }
 				var tbody = document.getElementById( 'dc-gi-is-url-tbody' );
 				if ( tbody ) { tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#7a8499;padding:24px"><?php echo esc_js( __( 'Loading…', 'dc-google-indexing' ) ); ?></td></tr>'; }
-				jQuery.post( ajaxUrl, { action: 'dc_gi_is_urls', nonce: nonce, page: page, filter: filter }, function ( r ) {
+				updateSortIcons();
+				jQuery.post( ajaxUrl, {
+					action:   'dc_gi_is_urls',
+					nonce:    nonce,
+					page:     page,
+					filter:   filter,
+					order_by: isOrderBy,
+					order:    isOrder
+				}, function ( r ) {
 					if ( ! r || ! r.success ) { return; }
 					var d = r.data;
 					isTotalPages = d.total_pages || 1;
 					renderUrlTable( d.rows, d.page, d.total );
 				} );
+			}
+
+			// ── Render rows with expandable detail panel ─────────────────────────
+
+			function buildRichResults( jsonStr ) {
+				if ( ! jsonStr ) { return ''; }
+				var items;
+				try { items = JSON.parse( jsonStr ); } catch(e) { return ''; }
+				if ( ! items || ! items.length ) { return ''; }
+				var html = '<div style="margin-top:8px">';
+				items.forEach( function(rtype) {
+					html += '<div style="margin-bottom:6px"><span style="font-size:11px;font-weight:600;color:#c8d0e0">' + esc(rtype.t || '') + '</span>';
+					(rtype.i||[]).forEach( function(item) {
+						if ( item.n ) { html += '<span style="font-size:11px;color:#7a8499;margin-left:6px">— ' + esc(item.n) + '</span>'; }
+						(item.i||[]).forEach( function(iss) {
+							var col = 'WARNING' === iss.s ? '#ff8d72' : '#fd5d93';
+							html += '<div style="font-size:11px;margin-left:12px;color:' + col + '">⚠ ' + esc(iss.m) + ' <span style="opacity:.6">(' + esc(iss.s) + ')</span></div>';
+						});
+					});
+					html += '</div>';
+				});
+				return html + '</div>';
+			}
+
+			function buildDetailRow( row, offset, i ) {
+				var gc  = row.google_canonical || '';
+				var uc  = row.user_canonical   || '';
+				var ca  = row.crawled_as        || '';
+				var rts = row.robots_txt_state  || '';
+				var idx = row.indexing_state    || '';
+				var rr  = buildRichResults( row.rich_results || '' );
+
+				var html = '<tr class="dc-gi-is-detail-row" data-idx="' + (offset+i) + '" style="display:none">'
+					+ '<td colspan="7" style="background:#111827;padding:0 0 0 48px;border-top:none">'
+					+ '<div style="padding:12px 16px 12px 0;display:grid;grid-template-columns:1fr 1fr;gap:8px 24px;font-size:12px;max-width:900px">';
+
+				if ( rts ) {
+					html += '<div><span style="color:#7a8499"><?php echo esc_js( __( 'Robots.txt', 'dc-google-indexing' ) ); ?>:</span> '
+						+ '<span style="color:' + ('ALLOWED' === rts ? '#00f2c3' : '#fd5d93') + '">' + esc(fmtState(rts)) + '</span></div>';
+				}
+				if ( idx ) {
+					var idxOk = 'INDEXING_ALLOWED' === idx;
+					html += '<div><span style="color:#7a8499"><?php echo esc_js( __( 'Indexing', 'dc-google-indexing' ) ); ?>:</span> '
+						+ '<span style="color:' + (idxOk ? '#00f2c3' : '#ff8d72') + '">' + esc(fmtState(idx)) + '</span></div>';
+				}
+				if ( ca ) {
+					html += '<div><span style="color:#7a8499"><?php echo esc_js( __( 'Crawled as', 'dc-google-indexing' ) ); ?>:</span> <span style="color:#c8d0e0">' + esc(fmtState(ca)) + '</span></div>';
+				}
+				if ( row.page_fetch_state ) {
+					html += '<div><span style="color:#7a8499"><?php echo esc_js( __( 'Page fetch', 'dc-google-indexing' ) ); ?>:</span> <span style="color:#c8d0e0">' + esc(fmtState(row.page_fetch_state)) + '</span></div>';
+				}
+				if ( gc ) {
+					var gcMatch = gc === row.url;
+					html += '<div style="grid-column:1/-1"><span style="color:#7a8499"><?php echo esc_js( __( 'Google canonical', 'dc-google-indexing' ) ); ?>:</span> '
+						+ '<a href="' + esc(gc) + '" target="_blank" rel="noopener noreferrer" style="color:' + (gcMatch ? '#00f2c3' : '#ff8d72') + ';font-size:11px">' + esc(gc) + '</a>'
+						+ (gcMatch ? '' : ' <span style="color:#ff8d72;font-size:11px">(<?php echo esc_js( __( 'differs from user canonical', 'dc-google-indexing' ) ); ?>)</span>') + '</div>';
+				}
+				if ( uc && uc !== gc ) {
+					html += '<div style="grid-column:1/-1"><span style="color:#7a8499"><?php echo esc_js( __( 'User canonical', 'dc-google-indexing' ) ); ?>:</span> '
+						+ '<a href="' + esc(uc) + '" target="_blank" rel="noopener noreferrer" style="color:#6ab0f5;font-size:11px">' + esc(uc) + '</a></div>';
+				}
+				if ( row.last_submitted && '0000-00-00 00:00:00' !== row.last_submitted ) {
+					html += '<div><span style="color:#7a8499"><?php echo esc_js( __( 'Last submitted', 'dc-google-indexing' ) ); ?>:</span> <span style="color:#c8d0e0">' + esc(fmtDate(row.last_submitted)) + '</span></div>';
+				}
+				if ( rr ) {
+					html += '<div style="grid-column:1/-1"><span style="color:#7a8499;font-weight:600"><?php echo esc_js( __( 'Rich Results', 'dc-google-indexing' ) ); ?></span>' + rr + '</div>';
+				}
+
+				html += '</div></td></tr>';
+				return html;
 			}
 
 			function renderUrlTable( rows, page, total ) {
@@ -4170,17 +4395,33 @@ function dc_gi_render_page(): void {
 						var badge  = verdictBadge[ row.index_verdict ] || '<span style="color:#7a8499">' + esc( row.index_verdict ) + '</span>';
 						var url    = row.url || '';
 						var urlDisp = url.replace( /^https?:\/\/[^\/]+/, '' ) || url;
-						html += '<tr>';
+						var hasDetail = !!(row.robots_txt_state || row.indexing_state || row.google_canonical || row.rich_results || row.crawled_as);
+						html += '<tr class="dc-gi-is-data-row" data-idx="' + (offset+i) + '" style="cursor:' + (hasDetail ? 'pointer' : 'default') + '">';
 						html += '<td style="color:#7a8499;font-size:12px">' + ( offset + i + 1 ) + '</td>';
 						html += '<td style="overflow:hidden"><a href="' + esc( url ) + '" target="_blank" rel="noopener noreferrer" style="color:#6ab0f5;font-size:12px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc( url ) + '">' + esc( urlDisp ) + '</a></td>';
 						html += '<td>' + badge + '</td>';
 						html += '<td style="font-size:12px;color:#c8d0e0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc( row.coverage_state ) + '">' + esc( row.coverage_state || '—' ) + '</td>';
-						html += '<td style="font-size:12px;color:#7a8499">' + esc( fmtFetch( row.page_fetch_state ) ) + '</td>';
+						html += '<td style="font-size:12px;color:#7a8499">' + esc( fmtDate( row.last_crawl_time ) ) + '</td>';
 						html += '<td style="font-size:12px;color:#7a8499">' + esc( fmtDate( row.last_inspected ) ) + '</td>';
-						html += '<td style="font-size:12px;color:#7a8499">' + esc( fmtDate( row.last_submitted ) ) + '</td>';
+						html += '<td style="font-size:12px;color:#7a8499;text-align:center">' + ( hasDetail ? '<span style="cursor:pointer;font-size:14px" title="<?php echo esc_js( __( 'Show details', 'dc-google-indexing' ) ); ?>">⌄</span>' : '' ) + '</td>';
 						html += '</tr>';
+						html += buildDetailRow( row, offset, i );
 					}
 					tbody.innerHTML = html;
+
+					// Wire expand/collapse.
+					tbody.querySelectorAll( '.dc-gi-is-data-row' ).forEach( function(tr) {
+						tr.addEventListener( 'click', function(e) {
+							if ( e.target.tagName === 'A' ) { return; }
+							var idx     = tr.getAttribute( 'data-idx' );
+							var detail  = tbody.querySelector( '.dc-gi-is-detail-row[data-idx="' + idx + '"]' );
+							if ( ! detail ) { return; }
+							var open = 'none' === detail.style.display;
+							detail.style.display = open ? '' : 'none';
+							var icon = tr.querySelector( 'td:last-child span' );
+							if ( icon ) { icon.textContent = open ? '⌃' : '⌄'; }
+						} );
+					} );
 				}
 				// Pagination info.
 				var info = document.getElementById( 'dc-gi-is-page-info' );
@@ -4212,7 +4453,7 @@ function dc_gi_render_page(): void {
 					var ts = document.getElementById( 'dc-gi-is-ts' );
 					if ( ts ) { ts.textContent = '<?php echo esc_js( __( 'Stats updated:', 'dc-google-indexing' ) ); ?> ' + new Date().toLocaleTimeString(); }
 					// Also reload the URL table to stay current.
-					loadUrlTable( isPage, isFilter );
+					loadUrlTable( isPage, isFilter, null, null );
 				} );
 			}
 
@@ -4229,22 +4470,31 @@ function dc_gi_render_page(): void {
 			scheduleAuto();
 
 			document.getElementById( 'dc-gi-is-prev' ).addEventListener( 'click', function () {
-				if ( isPage > 1 ) { loadUrlTable( isPage - 1, isFilter ); }
+				if ( isPage > 1 ) { loadUrlTable( isPage - 1, isFilter, null, null ); }
 			} );
 			document.getElementById( 'dc-gi-is-next' ).addEventListener( 'click', function () {
-				if ( isPage < isTotalPages ) { loadUrlTable( isPage + 1, isFilter ); }
+				if ( isPage < isTotalPages ) { loadUrlTable( isPage + 1, isFilter, null, null ); }
 			} );
 
 			document.querySelectorAll( '.dc-gi-is-filter-btn' ).forEach( function ( btn ) {
 				btn.addEventListener( 'click', function () {
 					document.querySelectorAll( '.dc-gi-is-filter-btn' ).forEach( function ( b ) { b.classList.remove( 'dc-gi-is-filter-active' ); } );
 					btn.classList.add( 'dc-gi-is-filter-active' );
-					loadUrlTable( 1, btn.dataset.filter || '' );
+					loadUrlTable( 1, btn.dataset.filter || '', null, null );
 				} );
 			} );
 
-			// Initial load.
-			loadUrlTable( 1, '' );
+			// Column header sort clicks.
+			document.querySelectorAll( '#dc-gi-is-url-tbl thead th[data-col]' ).forEach( function(th) {
+				th.addEventListener( 'click', function() {
+					var col = th.getAttribute( 'data-col' );
+					var newOrder = ( col === isOrderBy && 'DESC' === isOrder ) ? 'ASC' : 'DESC';
+					loadUrlTable( 1, isFilter, col, newOrder );
+				} );
+			} );
+
+			// Initial load — sort by Last Crawl descending.
+			loadUrlTable( 1, '', 'last_crawl_time', 'DESC' );
 		}());
 		</script>
 

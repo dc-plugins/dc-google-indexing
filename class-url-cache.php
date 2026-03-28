@@ -64,12 +64,19 @@ class DC_GI_URL_Cache {
 		$charset_collate = $wpdb->get_charset_collate();
 
 		$sql = "CREATE TABLE IF NOT EXISTS {$table} (
-			url            VARCHAR(600)  NOT NULL,
-			index_verdict  VARCHAR(30)   NOT NULL DEFAULT '',
-			coverage_state TEXT          NOT NULL,
-			page_fetch_state VARCHAR(60) NOT NULL DEFAULT '',
-			last_inspected DATETIME      NOT NULL,
-			last_submitted DATETIME      NULL DEFAULT NULL,
+			url              VARCHAR(600)  NOT NULL,
+			index_verdict    VARCHAR(30)   NOT NULL DEFAULT '',
+			coverage_state   TEXT          NOT NULL,
+			page_fetch_state VARCHAR(60)   NOT NULL DEFAULT '',
+			robots_txt_state VARCHAR(30)   NOT NULL DEFAULT '',
+			indexing_state   VARCHAR(60)   NOT NULL DEFAULT '',
+			last_crawl_time  DATETIME      NULL DEFAULT NULL,
+			google_canonical VARCHAR(600)  NOT NULL DEFAULT '',
+			user_canonical   VARCHAR(600)  NOT NULL DEFAULT '',
+			crawled_as       VARCHAR(20)   NOT NULL DEFAULT '',
+			rich_results     TEXT          NOT NULL,
+			last_inspected   DATETIME      NOT NULL,
+			last_submitted   DATETIME      NULL DEFAULT NULL,
 			PRIMARY KEY (url(600))
 		) {$charset_collate};";
 
@@ -232,7 +239,11 @@ class DC_GI_URL_Cache {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
 		$row = $wpdb->get_row(
 			$wpdb->prepare(
-				"SELECT index_verdict, coverage_state FROM `{$wpdb->prefix}dc_gi_url_cache` WHERE url = %s LIMIT 1",
+				"SELECT url, index_verdict, coverage_state, page_fetch_state,
+				        robots_txt_state, indexing_state, last_crawl_time,
+				        google_canonical, user_canonical, crawled_as, rich_results,
+				        last_inspected, last_submitted
+				 FROM `{$wpdb->prefix}dc_gi_url_cache` WHERE url = %s LIMIT 1",
 				$url
 			),
 			ARRAY_A
@@ -247,29 +258,52 @@ class DC_GI_URL_Cache {
 	/**
 	 * Upsert a single inspection result into the cache.
 	 *
-	 * @param string $url              Fully qualified URL.
-	 * @param string $index_verdict    e.g. 'PASS', 'FAIL', 'NEUTRAL', 'VERDICT_UNSPECIFIED'.
-	 * @param string $coverage_state   e.g. 'Submitted and indexed'.
-	 * @param string $page_fetch_state Google page fetch state string.
+	 * Accepts all fields parsed from the URL Inspection API response.
+	 * Provide at minimum 'index_verdict' and 'coverage_state'; all other
+	 * fields default to empty / null when omitted.
+	 *
+	 * Keys: index_verdict, coverage_state, page_fetch_state, robots_txt_state,
+	 * indexing_state, last_crawl_time (nullable string), google_canonical,
+	 * user_canonical, crawled_as, rich_results (JSON string).
+	 *
+	 * @param string $url    Fully qualified URL.
+	 * @param array  $fields Inspection data fields — see docblock above for supported keys.
 	 */
-	public static function upsert( string $url, string $index_verdict, string $coverage_state, string $page_fetch_state = '' ): void {
+	public static function upsert( string $url, array $fields ): void {
 		global $wpdb;
 		$now = gmdate( 'Y-m-d H:i:s' );
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
 		$wpdb->query(
 			$wpdb->prepare(
 				"INSERT INTO `{$wpdb->prefix}dc_gi_url_cache`
-				(url, index_verdict, coverage_state, page_fetch_state, last_inspected)
-			 VALUES (%s, %s, %s, %s, %s)
+				(url, index_verdict, coverage_state, page_fetch_state,
+				 robots_txt_state, indexing_state, last_crawl_time,
+				 google_canonical, user_canonical, crawled_as, rich_results,
+				 last_inspected)
+			 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 			 ON DUPLICATE KEY UPDATE
 				index_verdict    = VALUES(index_verdict),
 				coverage_state   = VALUES(coverage_state),
 				page_fetch_state = VALUES(page_fetch_state),
+				robots_txt_state = VALUES(robots_txt_state),
+				indexing_state   = VALUES(indexing_state),
+				last_crawl_time  = VALUES(last_crawl_time),
+				google_canonical = VALUES(google_canonical),
+				user_canonical   = VALUES(user_canonical),
+				crawled_as       = VALUES(crawled_as),
+				rich_results     = VALUES(rich_results),
 				last_inspected   = VALUES(last_inspected)",
 				$url,
-				$index_verdict,
-				$coverage_state,
-				$page_fetch_state,
+				(string) ( $fields['index_verdict'] ?? '' ),
+				(string) ( $fields['coverage_state'] ?? '' ),
+				(string) ( $fields['page_fetch_state'] ?? '' ),
+				(string) ( $fields['robots_txt_state'] ?? '' ),
+				(string) ( $fields['indexing_state'] ?? '' ),
+				$fields['last_crawl_time'] ?? null,
+				(string) ( $fields['google_canonical'] ?? '' ),
+				(string) ( $fields['user_canonical'] ?? '' ),
+				(string) ( $fields['crawled_as'] ?? '' ),
+				(string) ( $fields['rich_results'] ?? '' ),
 				$now
 			)
 		);
@@ -359,14 +393,26 @@ class DC_GI_URL_Cache {
 	}
 
 	/**
-	 * Parse the URL Inspection API response and derive an index_verdict.
+	 * Parse the URL Inspection API response into a flat field array ready for upsert().
 	 *
-	 * The API returns inspectionResult.indexStatusResult.verdict for Pro users.
-	 * For free / limited responses the verdict field may be absent — we derive
-	 * a best-effort verdict from coverageState in that case.
+	 * Extracts the full GSC inspection result: verdict, coverage state, crawl metadata,
+	 * canonical URLs, robots/indexing state, crawl agent, and rich results.
+	 * When the API omits the verdict (limited/legacy responses), it is derived from
+	 * coverageState so the cache always holds a usable verdict.
 	 *
-	 * @param array $result Decoded API response body.
-	 * @return array{index_verdict:string,coverage_state:string,page_fetch_state:string}
+	 * @param array $result Decoded URL Inspection API response body.
+	 * @return array{
+	 *     index_verdict:string,
+	 *     coverage_state:string,
+	 *     page_fetch_state:string,
+	 *     robots_txt_state:string,
+	 *     indexing_state:string,
+	 *     last_crawl_time:string|null,
+	 *     google_canonical:string,
+	 *     user_canonical:string,
+	 *     crawled_as:string,
+	 *     rich_results:string
+	 * }
 	 */
 	public static function parse_api_result( array $result ): array {
 		$isr            = $result['inspectionResult']['indexStatusResult'] ?? [];
@@ -397,10 +443,50 @@ class DC_GI_URL_Cache {
 			}
 		}
 
+		// Last crawl time: normalize ISO 8601 → MySQL DATETIME (UTC), or null.
+		$raw_crawl  = $isr['lastCrawlTime'] ?? '';
+		$last_crawl = '' !== $raw_crawl ? gmdate( 'Y-m-d H:i:s', (int) strtotime( $raw_crawl ) ) : null;
+
+		// Rich results — encode detected items + issues as compact JSON.
+		$rich_raw     = $result['inspectionResult']['richResultsResult']['detectedItems'] ?? [];
+		$rich_encoded = '';
+		if ( ! empty( $rich_raw ) ) {
+			$rich_clean = [];
+			foreach ( $rich_raw as $ritem ) {
+				$items = [];
+				foreach ( (array) ( $ritem['items'] ?? [] ) as $it ) {
+					$issues = [];
+					foreach ( (array) ( $it['issues'] ?? [] ) as $iss ) {
+						$issues[] = [
+							'm' => (string) ( $iss['issueMessage'] ?? '' ),
+							's' => (string) ( $iss['severity'] ?? '' ),
+						];
+					}
+					$items[] = [
+						'n' => (string) ( $it['name'] ?? '' ),
+						'i' => $issues,
+					];
+				}
+				$rich_clean[] = [
+					't' => (string) ( $ritem['richResultType'] ?? '' ),
+					'i' => $items,
+				];
+			}
+			$json         = wp_json_encode( $rich_clean );
+			$rich_encoded = $json ? (string) $json : '';
+		}
+
 		return [
 			'index_verdict'    => $index_verdict,
 			'coverage_state'   => $coverage_state,
 			'page_fetch_state' => $fetch_state,
+			'robots_txt_state' => (string) ( $isr['robotsTxtState'] ?? '' ),
+			'indexing_state'   => (string) ( $isr['indexingState'] ?? '' ),
+			'last_crawl_time'  => $last_crawl,
+			'google_canonical' => (string) ( $isr['googleCanonical'] ?? '' ),
+			'user_canonical'   => (string) ( $isr['userCanonical'] ?? '' ),
+			'crawled_as'       => (string) ( $isr['crawledAs'] ?? '' ),
+			'rich_results'     => $rich_encoded,
 		];
 	}
 
@@ -418,14 +504,9 @@ class DC_GI_URL_Cache {
 	 * Returns a short status string (for logging / admin AJAX).
 	 *
 	 * @param array $sa Decoded service-account JSON credentials.
-	 * @return string  'ok', 'ok:complete', 'early:sitemap_error', 'early:no_urls', 'early:inspect_quota_exhausted'
+	 * @return string  'ok', 'ok:complete', 'early:sitemap_error', 'early:no_urls'
 	 */
 	public static function run_inspect_batch( array $sa ): string {
-		// Bail immediately when the Inspection API daily quota (2,000/day) is gone.
-		if ( dc_gi_is_inspect_quota_exhausted() ) {
-			return 'early:inspect_quota_exhausted';
-		}
-
 		$site_url = trailingslashit( get_home_url() );
 
 		$all_urls = DC_GI_Sitemap::get_urls( 2000 );
@@ -446,22 +527,25 @@ class DC_GI_URL_Cache {
 			$result = DC_GI_JWT::inspect_url( $sa, $url, $site_url );
 
 			if ( is_wp_error( $result ) ) {
-				// 429 = Inspection API quota exhausted — abort without writing a bad
-				// cache entry so the URL will be retried tomorrow.
+				// 429 = Inspection API rate-limited — abort without writing a bad
+				// cache entry so the URL will be retried on the next cron run.
 				if ( 'dc_gi_inspect_quota_exceeded' === $result->get_error_code() ) {
-					return 'early:inspect_quota_exhausted';
+					return 'ok';
 				}
 				// Other transient errors — store a placeholder so we don't hammer
 				// a broken URL every minute, but keep processing remaining candidates.
-				self::upsert( $url, 'VERDICT_UNSPECIFIED', 'inspect_error: ' . $result->get_error_message() );
+				self::upsert(
+					$url,
+					[
+						'index_verdict'  => 'VERDICT_UNSPECIFIED',
+						'coverage_state' => 'inspect_error: ' . $result->get_error_message(),
+					]
+				);
 				continue;
 			}
 
-			// Count every successful Inspection API call against the daily quota.
-			dc_gi_increment_inspect_quota();
-
 			$parsed = self::parse_api_result( $result );
-			self::upsert( $url, $parsed['index_verdict'], $parsed['coverage_state'], $parsed['page_fetch_state'] );
+			self::upsert( $url, $parsed );
 		}
 
 		return 'ok';
@@ -475,12 +559,17 @@ class DC_GI_URL_Cache {
 	 * @param string $verdict_filter '' = all; 'PASS'|'NEUTRAL'|'FAIL'|'VERDICT_UNSPECIFIED'|'EXCLUDED' (NEUTRAL+UNSPECIFIED).
 	 * @param string $order_by       Column to sort by.
 	 * @param string $order          ASC or DESC.
-	 * @return array<int,array{url:string,index_verdict:string,coverage_state:string,page_fetch_state:string,last_inspected:string,last_submitted:string|null}>
+	 * @return array<int,array{
+	 *   url:string,index_verdict:string,coverage_state:string,page_fetch_state:string,
+	 *   robots_txt_state:string,indexing_state:string,last_crawl_time:string|null,
+	 *   google_canonical:string,user_canonical:string,crawled_as:string,rich_results:string,
+	 *   last_inspected:string,last_submitted:string|null
+	 * }>
 	 */
 	public static function get_paginated_urls( int $page, int $per_page, string $verdict_filter = '', string $order_by = 'last_inspected', string $order = 'DESC' ): array {
 		global $wpdb;
 
-		$allowed_cols = [ 'url', 'index_verdict', 'coverage_state', 'last_inspected', 'last_submitted' ];
+		$allowed_cols = [ 'url', 'index_verdict', 'coverage_state', 'last_crawl_time', 'last_inspected', 'last_submitted' ];
 		if ( ! in_array( $order_by, $allowed_cols, true ) ) {
 			$order_by = 'last_inspected';
 		}
@@ -488,7 +577,10 @@ class DC_GI_URL_Cache {
 		$offset = max( 0, ( $page - 1 ) * $per_page );
 		$table  = self::table();
 
-		$cols = 'url, index_verdict, coverage_state, page_fetch_state, last_inspected, last_submitted';
+		$cols = 'url, index_verdict, coverage_state, page_fetch_state,
+		         robots_txt_state, indexing_state, last_crawl_time,
+		         google_canonical, user_canonical, crawled_as, rich_results,
+		         last_inspected, last_submitted';
 		if ( 'EXCLUDED' === $verdict_filter ) {
 			$sql  = "SELECT {$cols} FROM {$table} WHERE index_verdict IN ('NEUTRAL','VERDICT_UNSPECIFIED') ORDER BY {$order_by} {$order} LIMIT %d OFFSET %d"; // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 			$args = [ $per_page, $offset ];

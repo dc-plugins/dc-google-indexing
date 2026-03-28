@@ -517,4 +517,109 @@ class DC_GI_JWT {
 		}
 		return true;
 	}
+
+	// -------------------------------------------------------------------------
+	// Service Usage API (quota limits)
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Obtain (or return cached) access token for the Service Usage API (read-only).
+	 *
+	 * @param  array $sa  Decoded service account JSON.
+	 * @return string|WP_Error      Bearer token or WP_Error.
+	 */
+	public static function get_cloud_token( array $sa ) {
+		return self::get_token_for_scope(
+			$sa,
+			'https://www.googleapis.com/auth/cloud-platform.read-only',
+			'dc_gi_cloud_token'
+		);
+	}
+
+	/**
+	 * Fetch Indexing API quota metrics from the Google Service Usage API.
+	 *
+	 * Returns a flat array of quota entries, each with keys:
+	 *   metric, displayName, unit, limit.
+	 *
+	 * Results are cached in the dc_gi_quota_limits transient for 1 hour.
+	 *
+	 * @param  array $sa  Decoded service account JSON.
+	 * @return array[]|WP_Error
+	 */
+	public static function get_service_quotas( array $sa ) {
+		$cached = get_transient( 'dc_gi_quota_limits' );
+		if ( false !== $cached ) {
+			return $cached;
+		}
+
+		$project_id = $sa['project_id'] ?? '';
+		if ( ! $project_id ) {
+			return new WP_Error(
+				'dc_gi_no_project',
+				__( 'No project_id found in service account JSON.', 'dc-google-indexing' )
+			);
+		}
+
+		$token = self::get_cloud_token( $sa );
+		if ( is_wp_error( $token ) ) {
+			return $token;
+		}
+
+		$url = add_query_arg(
+			'view',
+			'FULL',
+			'https://serviceusage.googleapis.com/v1beta1/projects/'
+				. rawurlencode( $project_id )
+				. '/services/indexing.googleapis.com/consumerQuotaMetrics'
+		);
+
+		$response = wp_remote_get(
+			$url,
+			[
+				'headers' => [ 'Authorization' => 'Bearer ' . $token ],
+				'timeout' => 15,
+			]
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+
+		$code = (int) wp_remote_retrieve_response_code( $response );
+		$body = json_decode( wp_remote_retrieve_body( $response ), true );
+
+		if ( 200 !== $code ) {
+			$msg = $body['error']['message']
+				?? sprintf(
+					/* translators: %d: HTTP response code */
+					__( 'Service Usage API returned HTTP %d.', 'dc-google-indexing' ),
+					$code
+				);
+			if ( 401 === $code ) {
+				delete_transient( 'dc_gi_cloud_token' );
+			}
+			return new WP_Error( 'dc_gi_quota_api_error', $msg, [ 'status' => $code ] );
+		}
+
+		$result = [];
+		foreach ( (array) ( $body['metrics'] ?? [] ) as $metric ) {
+			$metric_name = $metric['metric'] ?? '';
+			if ( ! $metric_name ) {
+				continue;
+			}
+			foreach ( (array) ( $metric['consumerQuotaLimits'] ?? [] ) as $qlimit ) {
+				$effective = (int) ( $qlimit['quotaBuckets'][0]['effectiveLimit'] ?? 0 );
+				$result[]  = [
+					'metric'      => $metric_name,
+					'displayName' => $metric['displayName'] ?? $metric_name,
+					'unit'        => $qlimit['unit'] ?? '',
+					'limit'       => $effective,
+				];
+			}
+		}
+
+		set_transient( 'dc_gi_quota_limits', $result, HOUR_IN_SECONDS );
+		return $result;
+	}
 }
