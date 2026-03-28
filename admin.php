@@ -1761,9 +1761,14 @@ function dc_gi_ajax_poll_start(): void {
 		wp_send_json_error( 'Forbidden', 403 );
 	}
 	dc_gi_set_poll_active( true );
-	// Ensure the recurring cron is scheduled so polling continues without the browser.
+	// Ensure the recurring poll cron is scheduled so polling continues without the browser.
 	if ( ! wp_next_scheduled( DC_GI_POLL_HOOK ) ) {
 		wp_schedule_event( time(), 'dc_gi_every1', DC_GI_POLL_HOOK );
+	}
+	// Ensure the inspect cron is also scheduled — schedule it to fire immediately so the
+	// cache starts building without waiting up to 90 s for the first cron tick.
+	if ( ! wp_next_scheduled( DC_GI_INSPECT_HOOK ) ) {
+		wp_schedule_event( time(), 'dc_gi_every1', DC_GI_INSPECT_HOOK );
 	}
 	wp_send_json_success( dc_gi_poll_status_data() );
 }
@@ -1829,6 +1834,18 @@ function dc_gi_ajax_poll_wait(): void {
 	wp_cache_delete( '_transient_dc_gi_poll_lock', 'options' );
 	$batch_status = dc_gi_run_poll_batch( true );
 
+	// When the inspection cache is empty the poll batch cannot proceed.
+	// Drive the inspect batch directly — mirrors how the poll batch is driven
+	// above so the interactive long-poll session works without relying on cron.
+	if ( 'early:cache_empty' === $batch_status ) {
+		dc_gi_run_inspect_batch();
+		// If the inspect batch added entries, signal an immediate retry instead
+		// of the 5-second back-off so the poll cycle can begin right away.
+		if ( DC_GI_URL_Cache::count_total() > 0 ) {
+			$batch_status = 'ok:inspect_ran';
+		}
+	}
+
 	// Build fresh response directly from DB.
 	$row_poll  = $wpdb->get_var(
 		$wpdb->prepare(
@@ -1879,6 +1896,8 @@ function dc_gi_ajax_poll_wait(): void {
 			'quota_used'      => $quota_used,
 			'quota_limit'     => $quota_limit,
 			'quota_exhausted' => $quota_used >= $quota_limit,
+			'cache_total'     => DC_GI_URL_Cache::count_total(),
+			'cache_excluded'  => DC_GI_URL_Cache::count_excluded(),
 		]
 	);
 }
