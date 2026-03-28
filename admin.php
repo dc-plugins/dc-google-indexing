@@ -2336,6 +2336,7 @@ function dc_gi_ajax_index_status(): void {
 			'verdicts'       => DC_GI_URL_Cache::get_verdict_counts(),
 			'coverage'       => DC_GI_URL_Cache::get_coverage_state_breakdown(),
 			'total'          => DC_GI_URL_Cache::count_total(),
+			'excluded'       => DC_GI_URL_Cache::count_excluded(),
 			'age_days'       => DC_GI_URL_Cache::oldest_entry_age_days(),
 			'inspect_errors' => DC_GI_URL_Cache::get_inspect_error_count(),
 		]
@@ -4303,17 +4304,15 @@ function dc_gi_render_page(): void {
 		<p style="color:#8892a4;max-width:720px;font-size:13px;margin-bottom:20px"><?php esc_html_e( 'Live snapshot of all URLs in the inspection cache, grouped by coverage state and index verdict. The stat cards auto-refresh every 30 seconds.', 'dc-google-indexing' ); ?></p>
 
 			<?php
-			$is_counts      = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::get_verdict_counts() : [];
-			$is_coverage    = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::get_coverage_state_breakdown() : [];
-			$is_total       = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::count_total() : 0;
-			$is_pass        = (int) ( $is_counts['PASS'] ?? 0 );
-			$is_fail        = (int) ( $is_counts['FAIL'] ?? 0 );
-			$is_neutral     = (int) ( $is_counts['NEUTRAL'] ?? 0 );
-			$is_unspec      = (int) ( $is_counts['VERDICT_UNSPECIFIED'] ?? 0 );
-			$is_inspect_err = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::get_inspect_error_count() : 0;
-			$is_excl        = $is_neutral + $is_unspec - $is_inspect_err;
-			$is_age         = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::oldest_entry_age_days() : null;
-			$is_ccolors     = [
+			$is_counts   = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::get_verdict_counts() : [];
+			$is_coverage = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::get_coverage_state_breakdown() : [];
+			$is_total    = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::count_total() : 0;
+			$is_pass     = (int) ( $is_counts['PASS'] ?? 0 );
+			$is_fail     = (int) ( $is_counts['FAIL'] ?? 0 );
+			$is_excl     = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::count_excluded() : 0;
+			$is_errors   = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::get_inspect_error_count() : 0;
+			$is_age      = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::oldest_entry_age_days() : null;
+			$is_ccolors  = [
 				'Submitted and indexed'                    => '#00f2c3',
 				'Indexed, though not submitted in sitemap' => '#00c9a7',
 				'URL is unknown to Google'                 => '#1d8cf8',
@@ -4348,15 +4347,17 @@ function dc_gi_render_page(): void {
 				<div class="dc-gi-stat-num"><?php echo esc_html( (string) $is_fail ); ?></div>
 				<div class="dc-gi-stat-label"><?php esc_html_e( 'Fail', 'dc-google-indexing' ); ?></div>
 			</div>
+			<?php if ( $is_errors > 0 ) : ?>
+			<div class="dc-gi-stat amber" id="is-stat-errors">
+				<div class="dc-gi-stat-num"><?php echo esc_html( (string) $is_errors ); ?></div>
+				<div class="dc-gi-stat-label"><?php esc_html_e( 'Insp. Errors', 'dc-google-indexing' ); ?></div>
+			</div>
+			<?php endif; ?>
 			<div class="dc-gi-stat" id="is-stat-age">
 				<div class="dc-gi-stat-num"><?php echo null !== $is_age ? esc_html( (string) $is_age ) : '&mdash;'; ?></div>
 				<div class="dc-gi-stat-label"><?php esc_html_e( 'Oldest Entry (days)', 'dc-google-indexing' ); ?></div>
 			</div>
 		</div><!-- /.stat cards -->
-
-		<div id="dc-gi-is-insp-err-notice" style="<?php echo $is_inspect_err > 0 ? '' : 'display:none;'; ?>background:rgba(255,165,0,.12);border:1px solid rgba(255,165,0,.35);border-radius:6px;padding:10px 16px;margin-bottom:20px;font-size:13px;color:#c8d0e0;max-width:720px">
-			&#9888; <span class="dc-gi-is-insp-err-cnt"><?php echo esc_html( (string) $is_inspect_err ); ?></span> <?php esc_html_e( 'URL(s) could not be inspected (Inspection API quota exhausted). They are excluded from submission and will be re-inspected automatically when the quota resets.', 'dc-google-indexing' ); ?>
-		</div>
 
 			<?php if ( $is_total > 0 ) : ?>
 		<!-- Two-column: coverage bars + verdict donut -->
@@ -4464,8 +4465,6 @@ function dc_gi_render_page(): void {
 		<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;align-items:center">
 			<span style="font-size:13px;font-weight:600;color:#c8d0e0;margin-right:6px"><?php esc_html_e( 'URL Status Table:', 'dc-google-indexing' ); ?></span>
 				<?php
-				$is_fv    = (int) ( $is_counts['VERDICT_UNSPECIFIED'] ?? 0 );
-				$is_fexcl = $is_neutral + $is_fv;
 				$is_ftabs = [
 					''         => [
 						'label' => __( 'All', 'dc-google-indexing' ),
@@ -4479,7 +4478,7 @@ function dc_gi_render_page(): void {
 					],
 					'EXCLUDED' => [
 						'label' => __( '⚠ Not Indexed', 'dc-google-indexing' ),
-						'n'     => $is_fexcl,
+						'n'     => $is_excl,
 						'color' => '#ff8d72',
 					],
 					'FAIL'     => [
@@ -4816,15 +4815,10 @@ function dc_gi_render_page(): void {
 					var inspErr = d.inspect_errors || 0;
 					setNum( 'is-stat-total',    d.total );
 					setNum( 'is-stat-pass',     v['PASS'] || 0 );
-					setNum( 'is-stat-excluded', ( v['NEUTRAL'] || 0 ) + ( v['VERDICT_UNSPECIFIED'] || 0 ) - inspErr );
+					setNum( 'is-stat-excluded', d.excluded || 0 );
 					setNum( 'is-stat-fail',     v['FAIL'] || 0 );
+					setNum( 'is-stat-errors',   inspErr );
 					setNum( 'is-stat-age',      null != d.age_days ? d.age_days : '\u2014' );
-					var notice = document.getElementById( 'dc-gi-is-insp-err-notice' );
-					if ( notice ) {
-						notice.style.display = inspErr > 0 ? '' : 'none';
-						var cnt = notice.querySelector( '.dc-gi-is-insp-err-cnt' );
-						if ( cnt ) { cnt.textContent = inspErr; }
-					}
 					var ts = document.getElementById( 'dc-gi-is-ts' );
 					if ( ts ) { ts.textContent = '<?php echo esc_js( __( 'Stats updated:', 'dc-google-indexing' ) ); ?> ' + new Date().toLocaleTimeString(); }
 					// Also reload the URL table to stay current.
