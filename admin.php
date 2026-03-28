@@ -78,6 +78,7 @@ add_action( 'wp_ajax_dc_gi_qa_scan_one', 'dc_gi_ajax_qa_scan_one' );
 add_action( 'wp_ajax_dc_gi_qa_stop', 'dc_gi_ajax_qa_stop' );
 add_action( 'admin_post_dc_gi_qa_clear', 'dc_gi_handle_qa_clear' );
 add_action( 'wp_ajax_dc_gi_index_status', 'dc_gi_ajax_index_status' );
+add_action( 'wp_ajax_dc_gi_is_urls', 'dc_gi_ajax_is_urls' );
 add_action( 'admin_enqueue_scripts', 'dc_gi_enqueue_scripts' );
 /**
  * Enqueue admin scripts and localized data for the plugin's admin page.
@@ -2166,6 +2167,38 @@ function dc_gi_ajax_index_status(): void {
 }
 
 /**
+ * AJAX: return a paginated page of individual URL inspection results for the Index Status tab.
+ */
+function dc_gi_ajax_is_urls(): void {
+	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_send_json_error( 'Forbidden', 403 );
+	}
+
+	$page    = max( 1, (int) ( $_POST['page'] ?? 1 ) );    // phpcs:ignore WordPress.Security.NonceVerification.Missing
+	$filter  = sanitize_text_field( wp_unslash( $_POST['filter'] ?? '' ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+	$allowed = [ '', 'PASS', 'NEUTRAL', 'FAIL', 'VERDICT_UNSPECIFIED', 'EXCLUDED' ];
+	if ( ! in_array( $filter, $allowed, true ) ) {
+		$filter = '';
+	}
+
+	$per_page    = 25;
+	$rows        = DC_GI_URL_Cache::get_paginated_urls( $page, $per_page, $filter );
+	$total       = DC_GI_URL_Cache::count_filtered( $filter );
+	$total_pages = (int) ceil( max( 1, $total ) / $per_page );
+
+	wp_send_json_success(
+		[
+			'rows'        => $rows,
+			'total'       => $total,
+			'page'        => $page,
+			'per_page'    => $per_page,
+			'total_pages' => $total_pages,
+		]
+	);
+}
+
+/**
  * Handle the reset-poll-cycle form action.
  */
 function dc_gi_handle_poll_reset(): void {
@@ -3986,40 +4019,70 @@ function dc_gi_render_page(): void {
 
 		</div><!-- /two-column grid -->
 
-		<!-- Sortable coverage breakdown table -->
-		<h3 style="font-size:14px;color:#c8d0e0;margin:0 0 10px"><?php esc_html_e( 'Coverage Breakdown', 'dc-google-indexing' ); ?></h3>
-		<div style="overflow-x:auto;max-width:940px;margin-bottom:24px">
-			<table class="widefat striped" id="dc-gi-is-tbl">
+		<!-- URL table — filter tabs -->
+		<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;align-items:center">
+			<span style="font-size:13px;font-weight:600;color:#c8d0e0;margin-right:6px"><?php esc_html_e( 'URL Status Table:', 'dc-google-indexing' ); ?></span>
+				<?php
+				$is_fv    = (int) ( $is_counts['VERDICT_UNSPECIFIED'] ?? 0 );
+				$is_fexcl = $is_neutral + $is_fv;
+				$is_ftabs = [
+					''         => [
+						'label' => __( 'All', 'dc-google-indexing' ),
+						'n'     => $is_total,
+						'color' => '#c8d0e0',
+					],
+					'PASS'     => [
+						'label' => __( '✓ Indexed', 'dc-google-indexing' ),
+						'n'     => $is_pass,
+						'color' => '#00f2c3',
+					],
+					'EXCLUDED' => [
+						'label' => __( '⚠ Not Indexed', 'dc-google-indexing' ),
+						'n'     => $is_fexcl,
+						'color' => '#ff8d72',
+					],
+					'FAIL'     => [
+						'label' => __( '✗ Fail', 'dc-google-indexing' ),
+						'n'     => $is_fail,
+						'color' => '#fd5d93',
+					],
+				];
+				foreach ( $is_ftabs as $is_fkey => $is_ftab ) :
+					?>
+			<button class="dc-gi-is-filter-btn button<?php echo '' === $is_fkey ? ' dc-gi-is-filter-active' : ''; ?>"
+				data-filter="<?php echo esc_attr( $is_fkey ); ?>"
+				style="font-size:12px;padding:4px 12px;color:<?php echo esc_attr( $is_ftab['color'] ); ?>;border-color:<?php echo esc_attr( $is_ftab['color'] ); ?>;background:rgba(0,0,0,.2)">
+					<?php echo esc_html( $is_ftab['label'] ); ?> <span class="dc-gi-is-fcount"><?php echo esc_html( (string) $is_ftab['n'] ); ?></span>
+			</button>
+				<?php endforeach; ?>
+		</div>
+
+		<!-- URL table -->
+		<div style="overflow-x:auto;max-width:100%;margin-bottom:8px">
+			<table class="widefat striped" id="dc-gi-is-url-tbl" style="min-width:760px;table-layout:fixed">
 				<thead>
 					<tr>
-						<th class="dc-gi-is-th" data-col="0" style="cursor:pointer;min-width:260px"><?php esc_html_e( 'Coverage State', 'dc-google-indexing' ); ?> <span class="dc-gi-is-arr">↕</span></th>
-						<th class="dc-gi-is-th" data-col="1" style="cursor:pointer;width:70px"><?php esc_html_e( 'URLs', 'dc-google-indexing' ); ?> <span class="dc-gi-is-arr">↓</span></th>
-						<th style="width:200px"><?php esc_html_e( '% of Total', 'dc-google-indexing' ); ?></th>
+						<th style="width:40px;color:#7a8499">#</th>
+						<th style="width:auto;min-width:260px;color:#c8d0e0"><?php esc_html_e( 'URL', 'dc-google-indexing' ); ?></th>
+						<th style="width:100px;color:#c8d0e0"><?php esc_html_e( 'Verdict', 'dc-google-indexing' ); ?></th>
+						<th style="width:240px;color:#c8d0e0"><?php esc_html_e( 'Coverage State', 'dc-google-indexing' ); ?></th>
+						<th style="width:130px;color:#c8d0e0"><?php esc_html_e( 'Page Fetch', 'dc-google-indexing' ); ?></th>
+						<th style="width:140px;color:#c8d0e0"><?php esc_html_e( 'Last Inspected', 'dc-google-indexing' ); ?></th>
+						<th style="width:130px;color:#c8d0e0"><?php esc_html_e( 'Last Submitted', 'dc-google-indexing' ); ?></th>
 					</tr>
 				</thead>
-				<tbody>
-					<?php
-					foreach ( $is_coverage as $is_row ) :
-						$is_state = (string) $is_row['coverage_state'];
-						$is_cnt   = (int) $is_row['count'];
-						$is_pct_f = $is_total > 0 ? round( $is_cnt / $is_total * 100, 1 ) : 0.0;
-						$is_col   = $is_ccolors[ $is_state ] ?? '#7a8499';
-						?>
-					<tr>
-						<td style="color:#c8d0e0"><?php echo esc_html( $is_state ); ?></td>
-						<td style="color:#c8d0e0;font-weight:600" data-n="<?php echo esc_attr( (string) $is_cnt ); ?>"><?php echo esc_html( (string) $is_cnt ); ?></td>
-						<td>
-							<div style="display:flex;align-items:center;gap:8px">
-								<div style="flex:1;background:rgba(255,255,255,.07);border-radius:4px;height:6px;overflow:hidden">
-									<div style="height:100%;width:<?php echo esc_attr( (string) min( 100.0, $is_pct_f ) ); ?>%;background:<?php echo esc_attr( $is_col ); ?>;border-radius:4px"></div>
-								</div>
-								<span style="font-size:12px;color:#7a8499;min-width:44px;text-align:right"><?php echo esc_html( (string) $is_pct_f ); ?>%</span>
-							</div>
-						</td>
-					</tr>
-					<?php endforeach; ?>
+				<tbody id="dc-gi-is-url-tbody">
+					<tr><td colspan="7" style="text-align:center;color:#7a8499;padding:24px"><?php esc_html_e( 'Loading…', 'dc-google-indexing' ); ?></td></tr>
 				</tbody>
 			</table>
+		</div>
+
+		<!-- Pagination row -->
+		<div id="dc-gi-is-pager" style="display:flex;align-items:center;gap:10px;margin-bottom:20px;flex-wrap:wrap">
+			<button id="dc-gi-is-prev" class="button dc-gi-btn-secondary" disabled><?php esc_html_e( '← Prev', 'dc-google-indexing' ); ?></button>
+			<span id="dc-gi-is-page-info" style="font-size:12px;color:#7a8499"></span>
+			<button id="dc-gi-is-next" class="button dc-gi-btn-secondary" disabled><?php esc_html_e( 'Next →', 'dc-google-indexing' ); ?></button>
+			<span id="dc-gi-is-tbl-ts" style="font-size:12px;color:#7a8499;margin-left:auto"></span>
 		</div>
 
 		<?php endif; /* $is_total > 0 */ ?>
@@ -4027,17 +4090,16 @@ function dc_gi_render_page(): void {
 			<?php if ( 0 === $is_total ) : ?>
 		<div class="dc-gi-callout info" style="max-width:740px">
 			<strong><?php esc_html_e( 'Cache is empty', 'dc-google-indexing' ); ?></strong><br>
-				<?php esc_html_e( 'The inspection cache has no data yet. The background cron inspects URLs from the sitemap at a rate of 3 URLs per minute (no quota used). Check back in a few minutes.', 'dc-google-indexing' ); ?>
+				<?php esc_html_e( 'The inspection cache has no data yet. The background cron inspects URLs from the sitemap at a rate of 3 URLs per minute. Check back in a few minutes.', 'dc-google-indexing' ); ?>
 		</div>
 		<?php endif; ?>
 
-		<!-- Refresh controls -->
-		<div style="display:flex;align-items:center;gap:12px;margin-top:16px;flex-wrap:wrap">
-			<button id="dc-gi-is-refresh" class="button dc-gi-btn-secondary" onclick="location.reload()"><?php esc_html_e( '&#8635; Refresh', 'dc-google-indexing' ); ?></button>
+		<!-- Auto-refresh summary stats every 30 s -->
+		<div style="display:flex;align-items:center;gap:12px;margin-top:12px;flex-wrap:wrap">
 			<span id="dc-gi-is-ts" style="font-size:12px;color:#7a8499"></span>
 			<label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#7a8499;cursor:pointer">
 				<input type="checkbox" id="dc-gi-is-auto" checked style="cursor:pointer">
-				<?php esc_html_e( 'Auto-refresh stats every 30 s', 'dc-google-indexing' ); ?>
+				<?php esc_html_e( 'Auto-refresh every 30 s', 'dc-google-indexing' ); ?>
 			</label>
 		</div>
 
@@ -4048,11 +4110,88 @@ function dc_gi_render_page(): void {
 			var nonce   = <?php echo wp_json_encode( wp_create_nonce( 'dc_gi_ajax' ) ); ?>;
 			var ajaxUrl = <?php echo wp_json_encode( admin_url( 'admin-ajax.php' ) ); ?>;
 			var timer   = null;
+			var isPage  = 1;
+			var isFilter = '';
+			var isTotalPages = 1;
+
+			// Verdict → display badge HTML.
+			var verdictBadge = {
+				'PASS':                '<span style="color:#00f2c3;font-weight:600">✓ Indexed</span>',
+				'NEUTRAL':             '<span style="color:#ff8d72;font-weight:600">⚠ Excluded</span>',
+				'VERDICT_UNSPECIFIED': '<span style="color:#9b5fe0;font-weight:600">? Unknown</span>',
+				'FAIL':                '<span style="color:#fd5d93;font-weight:600">✗ Fail</span>'
+			};
+
+			function esc( s ) {
+				return ( s || '' ).replace( /&/g,'&amp;' ).replace( /</g,'&lt;' ).replace( />/g,'&gt;' ).replace( /"/g,'&quot;' );
+			}
+
+			function fmtDate( s ) {
+				if ( ! s || '0000-00-00 00:00:00' === s ) { return '—'; }
+				var d = new Date( s.replace( ' ', 'T' ) + 'Z' );
+				return isNaN( d ) ? s : d.toLocaleDateString( undefined, { year:'numeric', month:'short', day:'numeric' } );
+			}
+
+			function fmtFetch( s ) {
+				if ( ! s ) { return '—'; }
+				return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase().replace( /_/g, ' ' );
+			}
 
 			function setNum( id, val ) {
 				var el = document.querySelector( '#' + id + ' .dc-gi-stat-num' );
 				if ( el ) { el.textContent = val; }
 			}
+
+			// ── Load URL table page ──────────────────────────────────────────────
+
+			function loadUrlTable( page, filter ) {
+				isPage   = page;
+				isFilter = filter;
+				var tbody = document.getElementById( 'dc-gi-is-url-tbody' );
+				if ( tbody ) { tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#7a8499;padding:24px"><?php echo esc_js( __( 'Loading…', 'dc-google-indexing' ) ); ?></td></tr>'; }
+				jQuery.post( ajaxUrl, { action: 'dc_gi_is_urls', nonce: nonce, page: page, filter: filter }, function ( r ) {
+					if ( ! r || ! r.success ) { return; }
+					var d = r.data;
+					isTotalPages = d.total_pages || 1;
+					renderUrlTable( d.rows, d.page, d.total );
+				} );
+			}
+
+			function renderUrlTable( rows, page, total ) {
+				var tbody = document.getElementById( 'dc-gi-is-url-tbody' );
+				if ( ! tbody ) { return; }
+				var offset = ( page - 1 ) * 25;
+				if ( ! rows || ! rows.length ) {
+					tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#7a8499;padding:24px"><?php echo esc_js( __( 'No URLs match this filter.', 'dc-google-indexing' ) ); ?></td></tr>';
+				} else {
+					var html = '';
+					for ( var i = 0; i < rows.length; i++ ) {
+						var row    = rows[ i ];
+						var badge  = verdictBadge[ row.index_verdict ] || '<span style="color:#7a8499">' + esc( row.index_verdict ) + '</span>';
+						var url    = row.url || '';
+						var urlDisp = url.replace( /^https?:\/\/[^\/]+/, '' ) || url;
+						html += '<tr>';
+						html += '<td style="color:#7a8499;font-size:12px">' + ( offset + i + 1 ) + '</td>';
+						html += '<td style="overflow:hidden"><a href="' + esc( url ) + '" target="_blank" rel="noopener noreferrer" style="color:#6ab0f5;font-size:12px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc( url ) + '">' + esc( urlDisp ) + '</a></td>';
+						html += '<td>' + badge + '</td>';
+						html += '<td style="font-size:12px;color:#c8d0e0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc( row.coverage_state ) + '">' + esc( row.coverage_state || '—' ) + '</td>';
+						html += '<td style="font-size:12px;color:#7a8499">' + esc( fmtFetch( row.page_fetch_state ) ) + '</td>';
+						html += '<td style="font-size:12px;color:#7a8499">' + esc( fmtDate( row.last_inspected ) ) + '</td>';
+						html += '<td style="font-size:12px;color:#7a8499">' + esc( fmtDate( row.last_submitted ) ) + '</td>';
+						html += '</tr>';
+					}
+					tbody.innerHTML = html;
+				}
+				// Pagination info.
+				var info = document.getElementById( 'dc-gi-is-page-info' );
+				if ( info ) { info.textContent = '<?php echo esc_js( __( 'Page', 'dc-google-indexing' ) ); ?> ' + page + ' <?php echo esc_js( __( 'of', 'dc-google-indexing' ) ); ?> ' + isTotalPages + ' (' + total + ' <?php echo esc_js( __( 'URLs', 'dc-google-indexing' ) ); ?>)'; }
+				document.getElementById( 'dc-gi-is-prev' ).disabled = page <= 1;
+				document.getElementById( 'dc-gi-is-next' ).disabled = page >= isTotalPages;
+				var ts = document.getElementById( 'dc-gi-is-tbl-ts' );
+				if ( ts ) { ts.textContent = '<?php echo esc_js( __( 'Updated:', 'dc-google-indexing' ) ); ?> ' + new Date().toLocaleTimeString(); }
+			}
+
+			// ── Refresh summary stat cards ───────────────────────────────────────
 
 			function doRefresh() {
 				jQuery.post( ajaxUrl, { action: 'dc_gi_index_status', nonce: nonce }, function ( resp ) {
@@ -4071,7 +4210,9 @@ function dc_gi_render_page(): void {
 						if ( cnt ) { cnt.textContent = inspErr; }
 					}
 					var ts = document.getElementById( 'dc-gi-is-ts' );
-					if ( ts ) { ts.textContent = <?php echo wp_json_encode( __( 'Updated:', 'dc-google-indexing' ) ); ?> + ' ' + new Date().toLocaleTimeString(); }
+					if ( ts ) { ts.textContent = '<?php echo esc_js( __( 'Stats updated:', 'dc-google-indexing' ) ); ?> ' + new Date().toLocaleTimeString(); }
+					// Also reload the URL table to stay current.
+					loadUrlTable( isPage, isFilter );
 				} );
 			}
 
@@ -4082,35 +4223,28 @@ function dc_gi_render_page(): void {
 				}
 			}
 
+			// ── Wire up events ───────────────────────────────────────────────────
+
 			document.getElementById( 'dc-gi-is-auto' ).addEventListener( 'change', scheduleAuto );
 			scheduleAuto();
 
-			// Client-side sort for coverage table.
-			var tbl = document.getElementById( 'dc-gi-is-tbl' );
-			if ( tbl ) {
-				var sortDir = {};
-				tbl.querySelectorAll( 'th.dc-gi-is-th' ).forEach( function ( th ) {
-					th.addEventListener( 'click', function () {
-						var col   = parseInt( th.dataset.col, 10 );
-						sortDir[col] = ! sortDir[col];
-						var tbody = tbl.querySelector( 'tbody' );
-						var rows  = Array.from( tbody.rows );
-						rows.sort( function ( a, b ) {
-							var ac = a.cells[col], bc = b.cells[col];
-							var av = ( ac.dataset.n !== undefined ) ? parseFloat( ac.dataset.n ) : NaN;
-							var bv = ( bc.dataset.n !== undefined ) ? parseFloat( bc.dataset.n ) : NaN;
-							if ( ! isNaN( av ) && ! isNaN( bv ) ) {
-								return sortDir[col] ? av - bv : bv - av;
-							}
-							var at = ac.textContent.trim(), bt = bc.textContent.trim();
-							return sortDir[col] ? at.localeCompare( bt ) : bt.localeCompare( at );
-						} );
-						rows.forEach( function ( r ) { tbody.appendChild( r ); } );
-						tbl.querySelectorAll( 'th.dc-gi-is-th .dc-gi-is-arr' ).forEach( function ( el ) { el.textContent = '\u2195'; } );
-						th.querySelector( '.dc-gi-is-arr' ).textContent = sortDir[col] ? '\u2191' : '\u2193';
-					} );
+			document.getElementById( 'dc-gi-is-prev' ).addEventListener( 'click', function () {
+				if ( isPage > 1 ) { loadUrlTable( isPage - 1, isFilter ); }
+			} );
+			document.getElementById( 'dc-gi-is-next' ).addEventListener( 'click', function () {
+				if ( isPage < isTotalPages ) { loadUrlTable( isPage + 1, isFilter ); }
+			} );
+
+			document.querySelectorAll( '.dc-gi-is-filter-btn' ).forEach( function ( btn ) {
+				btn.addEventListener( 'click', function () {
+					document.querySelectorAll( '.dc-gi-is-filter-btn' ).forEach( function ( b ) { b.classList.remove( 'dc-gi-is-filter-active' ); } );
+					btn.classList.add( 'dc-gi-is-filter-active' );
+					loadUrlTable( 1, btn.dataset.filter || '' );
 				} );
-			}
+			} );
+
+			// Initial load.
+			loadUrlTable( 1, '' );
 		}());
 		</script>
 
