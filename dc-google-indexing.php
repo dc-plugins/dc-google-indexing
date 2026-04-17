@@ -620,10 +620,13 @@ function dc_gi_run_poll_batch( bool $force = false ): string {
 			return 'early:cache_empty';
 		}
 
-		$watched_urls      = array_column( dc_gi_watchlist_get(), 'url' );
 		$poll_seen         = (array) get_option( 'dc_gi_poll_seen', [] );
 		$poll_seen_initial = $poll_seen; // Snapshot to detect mid-batch resets.
-		$skip_urls         = array_values( array_unique( array_merge( $watched_urls, $poll_seen ) ) );
+		// Skip only URLs already processed in this cycle — the watchlist is intentionally
+		// excluded from the skip list so polling can re-submit watchlist-tracked URLs that
+		// Google still hasn't indexed. dc_gi_enqueue_url() is idempotent and handles
+		// queue-level deduplication, so there is no risk of duplicate submissions.
+		$skip_urls = $poll_seen;
 
 		// Up to 5 URLs per batch — keeps each run small so the cron processes URLs incrementally
 		// and the interactive long-poll session stays within PHP's execution time budget.
@@ -898,12 +901,18 @@ function dc_gi_get_search_console_property( ?array $settings = null ): string {
 }
 
 /**
- * Reliably write dc_gi_poll_active — update_option silently fails if the row doesn't exist.
+ * Reliably write dc_gi_poll_active and ensure the value is immediately visible
+ * to subsequent get_option() calls within the same request.
+ *
+ * Uses update_option() / add_option() instead of raw $wpdb queries so WordPress's
+ * options cache (including the autoloaded alloptions bucket) is properly invalidated.
+ * The row-existence check is kept via $wpdb so the correct API is used for each case.
  *
  * @param bool $active True to activate polling, false to deactivate.
  */
 function dc_gi_set_poll_active( bool $active ): void {
 	global $wpdb;
+	$value  = $active ? '1' : '';
 	$exists = (int) $wpdb->get_var(
 		$wpdb->prepare(
 			"SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name = %s",
@@ -911,18 +920,10 @@ function dc_gi_set_poll_active( bool $active ): void {
 		)
 	);
 	if ( $exists ) {
-		$wpdb->update( $wpdb->options, [ 'option_value' => $active ? '1' : '' ], [ 'option_name' => 'dc_gi_poll_active' ] );
+		update_option( 'dc_gi_poll_active', $value, 'yes' );
 	} else {
-		$wpdb->insert(
-			$wpdb->options,
-			[
-				'option_name'  => 'dc_gi_poll_active',
-				'option_value' => $active ? '1' : '',
-				'autoload'     => 'yes',
-			]
-		);
+		add_option( 'dc_gi_poll_active', $value, '', 'yes' );
 	}
-	wp_cache_delete( 'dc_gi_poll_active', 'options' );
 }
 
 /**
