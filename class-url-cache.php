@@ -387,6 +387,33 @@ class DC_GI_URL_Cache {
 	}
 
 	/**
+	 * Mark an existing cached URL as indexed (PASS) without resetting last_inspected.
+	 *
+	 * Used when the watchlist confirms a URL is indexed but no fresh API result is
+	 * available (e.g. after "Clear All Indexed").  Only updates existing rows so the
+	 * background cron's TTL-based re-inspection schedule is preserved — the URL will
+	 * still be re-inspected after DC_GI_CACHE_TTL seconds, giving Google time to
+	 * confirm the state independently.
+	 *
+	 * @param string $url           Fully qualified URL.
+	 * @param string $coverage_state Coverage state string from the watchlist entry.
+	 */
+	public static function mark_indexed( string $url, string $coverage_state = 'Submitted and indexed' ): void {
+		global $wpdb;
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+		$wpdb->update(
+			self::table(),
+			[
+				'index_verdict'  => 'PASS',
+				'coverage_state' => $coverage_state,
+			],
+			[ 'url' => $url ],
+			[ '%s', '%s' ],
+			[ '%s' ]
+		);
+	}
+
+	/**
 	 * Update the Search Analytics columns for an existing cached URL.
 	 *
 	 * Only updates rows that are already in the cache — does not insert new rows.

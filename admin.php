@@ -272,6 +272,8 @@ function dc_gi_admin_css(): string {
 /* WP notices */
 .dc-gi-panel .notice{background:rgba(29,140,248,.08)!important;border-left-color:#1d8cf8!important;color:#c8d0e0!important}
 .dc-gi-panel .notice p{color:#c8d0e0!important}
+/* WP form-table/form-wrap label overrides — prevent dark default text from melding into dark panel backgrounds */
+.dc-gi-panel .form-table th,.dc-gi-panel .form-wrap label{color:#c8d0e0}
 /* Watchlist row FLIP animation */
 #dc-gi-wl-tbody tr{will-change:transform}
 .dc-gi-wl-flash{animation:dcGiWlFlash .9s ease-out}
@@ -1433,9 +1435,22 @@ function dc_gi_handle_watch_clear_indexed(): void {
 		wp_die( esc_html__( 'Forbidden', 'dc-google-indexing' ) );
 	}
 	$list     = get_option( 'dc_gi_watchlist', [] );
+	$indexed  = array_values( array_filter( $list, fn( $e ) => 'indexed' === $e['status'] ) );
 	$filtered = array_values( array_filter( $list, fn( $e ) => 'indexed' !== $e['status'] ) );
 	$removed  = count( $list ) - count( $filtered );
 	update_option( 'dc_gi_watchlist', $filtered, false );
+
+	// Sync the URL cache for every cleared entry so the Index Status counters
+	// ("N cached · N need submission") reflect the confirmed indexed state
+	// without waiting for the background inspection cron to re-visit each URL.
+	// mark_indexed() updates only index_verdict and coverage_state and intentionally
+	// leaves last_inspected untouched so the TTL-based re-inspection schedule is preserved.
+	foreach ( $indexed as $entry ) {
+		DC_GI_URL_Cache::mark_indexed(
+			$entry['url'],
+			! empty( $entry['coverage'] ) ? $entry['coverage'] : 'Submitted and indexed'
+		);
+	}
 	wp_safe_redirect(
 		add_query_arg(
 			[
@@ -2691,7 +2706,16 @@ function dc_gi_render_page(): void {
 		'cache_cleared'         => [ 'success', __( 'Inspection cache cleared — the background cron will rebuild it automatically.', 'dc-google-indexing' ) ],
 	];
 
-	$all_post_types = get_post_types( [ 'public' => true ], 'objects' );
+	// Allowlist: WordPress core types (via _builtin) plus known WooCommerce types.
+	// This prevents third-party plugin types (GDPR tools, CRMs, etc.) from appearing
+	// while still surfacing WooCommerce product pages that benefit from indexing.
+	$woo_post_types = [ 'product' ];
+	$all_post_types = array_filter(
+		get_post_types( [ 'public' => true ], 'objects' ),
+		static function ( $pt ) use ( $woo_post_types ) {
+			return $pt->_builtin || in_array( $pt->name, $woo_post_types, true );
+		}
+	);
 	?>
 	<div class="wrap dc-gi-admin">
 		<h1 class="dc-gi-page-title">

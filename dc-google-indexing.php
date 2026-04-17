@@ -545,6 +545,10 @@ function dc_gi_run_watchlist_check(): void {
 		$coverage               = $result['inspectionResult']['indexStatusResult']['coverageState'] ?? '';
 		$list[ $k ]['coverage'] = $coverage;
 
+		// Sync the URL cache with this fresh result — keeps "need submission" counts
+		// accurate without waiting for the background inspection cron to re-visit.
+		DC_GI_URL_Cache::upsert( $list[ $k ]['url'], DC_GI_URL_Cache::parse_api_result( $result ) );
+
 		$new_status = dc_gi_resolve_watchlist_status( $list[ $k ]['status'], $coverage );
 		if ( 'removed' === $new_status || 'indexed' === $new_status ) {
 			$list[ $k ]['status'] = $new_status;
@@ -1168,6 +1172,10 @@ function dc_gi_run_watch_check_one_cron(): void {
 		$entry['last_checked'] = time();
 		$coverage              = $result['inspectionResult']['indexStatusResult']['coverageState'] ?? '';
 		$entry['coverage']     = $coverage;
+
+		// Sync the URL cache with this fresh result — keeps "need submission" counts
+		// accurate without waiting for the background inspection cron to re-visit.
+		DC_GI_URL_Cache::upsert( $entry['url'], DC_GI_URL_Cache::parse_api_result( $result ) );
 
 		$new_status = dc_gi_resolve_watchlist_status( $entry['status'], $coverage );
 		if ( 'removed' === $new_status || 'indexed' === $new_status ) {
