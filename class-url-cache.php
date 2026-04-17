@@ -110,7 +110,7 @@ class DC_GI_URL_Cache {
 		$table = self::table();
 
 		// Map of column name => ALTER TABLE fragment (type + constraints).
-		$expected = [
+		$expected = array(
 			'robots_txt_state' => "VARCHAR(30) NOT NULL DEFAULT ''",
 			'indexing_state'   => "VARCHAR(60) NOT NULL DEFAULT ''",
 			'last_crawl_time'  => 'DATETIME NULL DEFAULT NULL',
@@ -123,7 +123,7 @@ class DC_GI_URL_Cache {
 			'sa_ctr'           => 'FLOAT NOT NULL DEFAULT 0',
 			'sa_position'      => 'FLOAT NOT NULL DEFAULT 0',
 			'sa_updated'       => 'DATETIME NULL DEFAULT NULL',
-		];
+		);
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
 		$existing = $wpdb->get_col(
@@ -166,7 +166,7 @@ class DC_GI_URL_Cache {
 	 *                             Defaults to DC_GI_CACHE_TTL.  Pass 0 to skip TTL check.
 	 * @return string[]
 	 */
-	public static function get_excluded_urls( int $limit, array $skip_urls = [], int $max_age_s = 0 ): array {
+	public static function get_excluded_urls( int $limit, array $skip_urls = array(), int $max_age_s = 0 ): array {
 		global $wpdb;
 
 		if ( $max_age_s <= 0 ) {
@@ -190,7 +190,7 @@ class DC_GI_URL_Cache {
 				    AND url NOT IN ({$placeholders})
 				  ORDER BY last_inspected ASC
 				  LIMIT %d",
-					array_merge( [ $cutoff, $not_like ], $skip_urls, [ $limit ] )
+					array_merge( array( $cutoff, $not_like ), $skip_urls, array( $limit ) )
 				)
 				// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber
 			);
@@ -211,7 +211,7 @@ class DC_GI_URL_Cache {
 			);
 		}
 
-		return $rows ? (array) $rows : [];
+		return $rows ? (array) $rows : array();
 	}
 
 	/**
@@ -379,10 +379,10 @@ class DC_GI_URL_Cache {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
 		$wpdb->update(
 			self::table(),
-			[ 'last_submitted' => gmdate( 'Y-m-d H:i:s' ) ],
-			[ 'url' => $url ],
-			[ '%s' ],
-			[ '%s' ]
+			array( 'last_submitted' => gmdate( 'Y-m-d H:i:s' ) ),
+			array( 'url' => $url ),
+			array( '%s' ),
+			array( '%s' )
 		);
 	}
 
@@ -403,13 +403,13 @@ class DC_GI_URL_Cache {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
 		$wpdb->update(
 			self::table(),
-			[
+			array(
 				'index_verdict'  => 'PASS',
 				'coverage_state' => $coverage_state,
-			],
-			[ 'url' => $url ],
-			[ '%s', '%s' ],
-			[ '%s' ]
+			),
+			array( 'url' => $url ),
+			array( '%s', '%s' ),
+			array( '%s' )
 		);
 	}
 
@@ -427,16 +427,16 @@ class DC_GI_URL_Cache {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
 		$wpdb->update(
 			self::table(),
-			[
+			array(
 				'sa_clicks'      => (int) ( $fields['sa_clicks'] ?? 0 ),
 				'sa_impressions' => (int) ( $fields['sa_impressions'] ?? 0 ),
 				'sa_ctr'         => (float) ( $fields['sa_ctr'] ?? 0.0 ),
 				'sa_position'    => (float) ( $fields['sa_position'] ?? 0.0 ),
 				'sa_updated'     => gmdate( 'Y-m-d H:i:s' ),
-			],
-			[ 'url' => $url ],
-			[ '%d', '%d', '%f', '%f', '%s' ],
-			[ '%s' ]
+			),
+			array( 'url' => $url ),
+			array( '%d', '%d', '%f', '%f', '%s' ),
+			array( '%s' )
 		);
 	}
 
@@ -466,7 +466,7 @@ class DC_GI_URL_Cache {
 				return 'error:' . $result->get_error_message();
 			}
 
-			$rows = (array) ( $result['rows'] ?? [] );
+			$rows = (array) ( $result['rows'] ?? array() );
 			if ( empty( $rows ) ) {
 				break;
 			}
@@ -478,12 +478,12 @@ class DC_GI_URL_Cache {
 				}
 				self::upsert_analytics(
 					$url,
-					[
+					array(
 						'sa_clicks'      => (int) round( (float) ( $row['clicks'] ?? 0 ) ),
 						'sa_impressions' => (int) round( (float) ( $row['impressions'] ?? 0 ) ),
 						'sa_ctr'         => (float) ( $row['ctr'] ?? 0.0 ),
 						'sa_position'    => (float) ( $row['position'] ?? 0.0 ),
-					]
+					)
 				);
 				++$updated;
 			}
@@ -517,7 +517,7 @@ class DC_GI_URL_Cache {
 	public static function delete_url( string $url ): void {
 		global $wpdb;
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
-		$wpdb->delete( self::table(), [ 'url' => $url ], [ '%s' ] );
+		$wpdb->delete( self::table(), array( 'url' => $url ), array( '%s' ) );
 	}
 
 	// =========================================================================
@@ -537,7 +537,7 @@ class DC_GI_URL_Cache {
 		global $wpdb;
 
 		if ( empty( $all_sitemap_urls ) ) {
-			return [];
+			return array();
 		}
 
 		$cutoff   = gmdate( 'Y-m-d H:i:s', time() - DC_GI_CACHE_TTL );
@@ -553,15 +553,15 @@ class DC_GI_URL_Cache {
 			  WHERE url IN ({$placeholders})
 			    AND last_inspected >= %s
 			    AND coverage_state NOT LIKE %s",
-				array_merge( $all_sitemap_urls, [ $cutoff, $not_like ] )
+				array_merge( $all_sitemap_urls, array( $cutoff, $not_like ) )
 			)
 			// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber
 		);
 
-		$fresh_set = array_flip( $fresh_urls ?? [] );
+		$fresh_set = array_flip( $fresh_urls ?? array() );
 
 		// URLs not in cache, or stale, in original sitemap order.
-		$needing = [];
+		$needing = array();
 		foreach ( $all_sitemap_urls as $u ) {
 			if ( ! isset( $fresh_set[ $u ] ) ) {
 				$needing[] = $u;
@@ -597,27 +597,27 @@ class DC_GI_URL_Cache {
 	 * }
 	 */
 	public static function parse_api_result( array $result ): array {
-		$isr            = $result['inspectionResult']['indexStatusResult'] ?? [];
+		$isr            = $result['inspectionResult']['indexStatusResult'] ?? array();
 		$raw_verdict    = $isr['verdict'] ?? '';
 		$coverage_state = $isr['coverageState'] ?? '';
 		$fetch_state    = $isr['pageFetchState'] ?? '';
 
 		// Map raw API verdict to our normalised set.
-		$verdict_map   = [
+		$verdict_map   = array(
 			'PASS'                => 'PASS',
 			'FAIL'                => 'FAIL',
 			'NEUTRAL'             => 'NEUTRAL',
 			'VERDICT_UNSPECIFIED' => 'VERDICT_UNSPECIFIED',
 			'PARTIAL'             => 'NEUTRAL',
-		];
+		);
 		$index_verdict = $verdict_map[ $raw_verdict ] ?? '';
 
 		// Derive from coverage state when verdict is absent (legacy or limited responses).
 		if ( '' === $index_verdict ) {
-			$indexed_states = [
+			$indexed_states = array(
 				'Submitted and indexed',
 				'Indexed, not submitted in sitemap',
-			];
+			);
 			if ( in_array( $coverage_state, $indexed_states, true ) ) {
 				$index_verdict = 'PASS';
 			} elseif ( '' !== $coverage_state ) {
@@ -630,35 +630,35 @@ class DC_GI_URL_Cache {
 		$last_crawl = '' !== $raw_crawl ? gmdate( 'Y-m-d H:i:s', (int) strtotime( $raw_crawl ) ) : null;
 
 		// Rich results — encode detected items + issues as compact JSON.
-		$rich_raw     = $result['inspectionResult']['richResultsResult']['detectedItems'] ?? [];
+		$rich_raw     = $result['inspectionResult']['richResultsResult']['detectedItems'] ?? array();
 		$rich_encoded = '';
 		if ( ! empty( $rich_raw ) ) {
-			$rich_clean = [];
+			$rich_clean = array();
 			foreach ( $rich_raw as $ritem ) {
-				$items = [];
-				foreach ( (array) ( $ritem['items'] ?? [] ) as $it ) {
-					$issues = [];
-					foreach ( (array) ( $it['issues'] ?? [] ) as $iss ) {
-						$issues[] = [
+				$items = array();
+				foreach ( (array) ( $ritem['items'] ?? array() ) as $it ) {
+					$issues = array();
+					foreach ( (array) ( $it['issues'] ?? array() ) as $iss ) {
+						$issues[] = array(
 							'm' => (string) ( $iss['issueMessage'] ?? '' ),
 							's' => (string) ( $iss['severity'] ?? '' ),
-						];
+						);
 					}
-					$items[] = [
+					$items[] = array(
 						'n' => (string) ( $it['name'] ?? '' ),
 						'i' => $issues,
-					];
+					);
 				}
-				$rich_clean[] = [
+				$rich_clean[] = array(
 					't' => (string) ( $ritem['richResultType'] ?? '' ),
 					'i' => $items,
-				];
+				);
 			}
 			$json         = wp_json_encode( $rich_clean );
 			$rich_encoded = $json ? (string) $json : '';
 		}
 
-		return [
+		return array(
 			'index_verdict'    => $index_verdict,
 			'coverage_state'   => $coverage_state,
 			'page_fetch_state' => $fetch_state,
@@ -669,7 +669,7 @@ class DC_GI_URL_Cache {
 			'user_canonical'   => (string) ( $isr['userCanonical'] ?? '' ),
 			'crawled_as'       => (string) ( $isr['crawledAs'] ?? '' ),
 			'rich_results'     => $rich_encoded,
-		];
+		);
 	}
 
 	// =========================================================================
@@ -686,13 +686,19 @@ class DC_GI_URL_Cache {
 	 * Returns a short status string (for logging / admin AJAX).
 	 *
 	 * @param array $sa Decoded service-account JSON credentials.
-	 * @return string  'ok', 'ok:complete', 'early:sitemap_error', 'early:no_urls', 'early:quota_backoff'
+	 * @return array {
+	 *   @type string   $status    'ok', 'ok:complete', 'early:sitemap_error', 'early:no_urls', 'early:quota_backoff'
+	 *   @type string[] $upserted  URLs successfully inspected and upserted this run, keyed by URL with coverage_state as value.
+	 * }
 	 */
-	public static function run_inspect_batch( array $sa ): string {
+	public static function run_inspect_batch( array $sa ): array {
 		// Bail early when the URL Inspection API quota is known to be exhausted.
 		// The backoff transient is set for 1 hour so the cron doesn't hammer the API.
 		if ( get_transient( 'dc_gi_inspect_quota_backoff' ) ) {
-			return 'early:quota_backoff';
+			return array(
+				'status'   => 'early:quota_backoff',
+				'upserted' => array(),
+			);
 		}
 
 		$site_url = dc_gi_get_search_console_property();
@@ -701,15 +707,23 @@ class DC_GI_URL_Cache {
 		// 1-minute cron tick — the cache is refreshed automatically every 5 minutes.
 		$all_urls = dc_gi_get_sitemap_urls_cached();
 		if ( empty( $all_urls ) ) {
-			return 'early:no_urls';
+			return array(
+				'status'   => 'early:no_urls',
+				'upserted' => array(),
+			);
 		}
 
 		$candidates = self::get_urls_needing_inspection( $all_urls, DC_GI_INSPECT_BATCH_SIZE );
 
 		if ( empty( $candidates ) ) {
 			// All sitemap URLs are fresh — nothing to do this run.
-			return 'ok:complete';
+			return array(
+				'status'   => 'ok:complete',
+				'upserted' => array(),
+			);
 		}
+
+		$upserted = array();
 
 		foreach ( $candidates as $url ) {
 			$result = DC_GI_JWT::inspect_url( $sa, $url, $site_url );
@@ -719,25 +733,32 @@ class DC_GI_URL_Cache {
 				// cron runs skip API calls until the quota window resets.
 				if ( 'dc_gi_inspect_quota_exceeded' === $result->get_error_code() ) {
 					set_transient( 'dc_gi_inspect_quota_backoff', 1, HOUR_IN_SECONDS );
-					return 'ok';
+					return array(
+						'status'   => 'ok',
+						'upserted' => $upserted,
+					);
 				}
 				// Other transient errors — store a placeholder so we don't hammer
 				// a broken URL every minute, but keep processing remaining candidates.
 				self::upsert(
 					$url,
-					[
+					array(
 						'index_verdict'  => 'VERDICT_UNSPECIFIED',
 						'coverage_state' => 'inspect_error: ' . $result->get_error_message(),
-					]
+					)
 				);
 				continue;
 			}
 
 			$parsed = self::parse_api_result( $result );
 			self::upsert( $url, $parsed );
+			$upserted[ $url ] = $parsed['coverage_state'] ?? '';
 		}
 
-		return 'ok';
+		return array(
+			'status'   => 'ok',
+			'upserted' => $upserted,
+		);
 	}
 
 	/**
@@ -758,7 +779,7 @@ class DC_GI_URL_Cache {
 	public static function get_paginated_urls( int $page, int $per_page, string $verdict_filter = '', string $order_by = 'last_inspected', string $order = 'DESC' ): array {
 		global $wpdb;
 
-		$allowed_cols = [ 'url', 'index_verdict', 'coverage_state', 'last_crawl_time', 'last_inspected', 'last_submitted' ];
+		$allowed_cols = array( 'url', 'index_verdict', 'coverage_state', 'last_crawl_time', 'last_inspected', 'last_submitted' );
 		if ( ! in_array( $order_by, $allowed_cols, true ) ) {
 			$order_by = 'last_inspected';
 		}
@@ -773,17 +794,17 @@ class DC_GI_URL_Cache {
 		         sa_clicks, sa_impressions, sa_ctr, sa_position, sa_updated';
 		if ( 'EXCLUDED' === $verdict_filter ) {
 			$sql  = "SELECT {$cols} FROM {$table} WHERE index_verdict IN ('NEUTRAL','VERDICT_UNSPECIFIED') ORDER BY {$order_by} {$order} LIMIT %d OFFSET %d"; // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-			$args = [ $per_page, $offset ];
+			$args = array( $per_page, $offset );
 		} elseif ( ! empty( $verdict_filter ) ) {
 			$sql  = "SELECT {$cols} FROM {$table} WHERE index_verdict = %s ORDER BY {$order_by} {$order} LIMIT %d OFFSET %d"; // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-			$args = [ $verdict_filter, $per_page, $offset ];
+			$args = array( $verdict_filter, $per_page, $offset );
 		} else {
 			$sql  = "SELECT {$cols} FROM {$table} ORDER BY {$order_by} {$order} LIMIT %d OFFSET %d"; // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-			$args = [ $per_page, $offset ];
+			$args = array( $per_page, $offset );
 		}
 		$rows = $wpdb->get_results( $wpdb->prepare( $sql, $args ), ARRAY_A ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared
 
-		return $rows ? (array) $rows : [];
+		return $rows ? (array) $rows : array();
 	}
 
 	/**
@@ -819,7 +840,7 @@ class DC_GI_URL_Cache {
 		$table = self::table();
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		$rows   = $wpdb->get_results( "SELECT index_verdict, COUNT(*) AS cnt FROM {$table} GROUP BY index_verdict", ARRAY_A );
-		$counts = [];
+		$counts = array();
 		foreach ( (array) $rows as $row ) {
 			$counts[ (string) $row['index_verdict'] ] = (int) $row['cnt'];
 		}
@@ -845,12 +866,12 @@ class DC_GI_URL_Cache {
 			// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 			ARRAY_A
 		);
-		$result = [];
+		$result = array();
 		foreach ( (array) $rows as $row ) {
-			$result[] = [
+			$result[] = array(
 				'coverage_state' => (string) $row['coverage_state'],
 				'count'          => (int) $row['cnt'],
-			];
+			);
 		}
 		return $result;
 	}

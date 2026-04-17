@@ -6,7 +6,7 @@
  * Plugin Name: DC Google Indexing
  * Plugin URI:  https://github.com/dc-plugins/dc-google-indexing
  * Description: Submit URLs to Google's Web Search Indexing API for instant crawling. Supports manual batch submission and automatic submission on publish/update.
- * Version:     1.4.0
+ * Version:     1.5.0
  * Author:      lennilg
  * Author URI:  https://www.dampcig.dk
  * License:     GPL-2.0+
@@ -21,14 +21,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'DC_GI_VERSION', '1.4.0' );
+define( 'DC_GI_VERSION', '1.5.0' );
 define( 'DC_GI_DB_VERSION', '1.4.0' ); // Increment when the URL-cache table schema changes.
 define( 'DC_GI_FILE', __FILE__ );
 define( 'DC_GI_DIR', plugin_dir_path( __FILE__ ) );
 define( 'DC_GI_CRON_HOOK', 'dc_gi_process_queue' );
 define( 'DC_GI_WATCH_HOOK', 'dc_gi_check_watchlist' );
 define( 'DC_GI_WATCH_CHECK_HOOK', 'dc_gi_watch_check_one_cron' );
-define( 'DC_GI_POLL_HOOK', 'dc_gi_poll_batch' );
+
 define( 'DC_GI_INSPECT_HOOK', 'dc_gi_inspect_batch' );
 define( 'DC_GI_ANALYTICS_HOOK', 'dc_gi_analytics_batch' );
 define( 'DC_GI_INSPECT_SIGNAL_HOOK', 'dc_gi_inspection_signal' );
@@ -39,12 +39,12 @@ define( 'DC_GI_DAILY_CAP', 200 );
 // stay in sync if Google renames or adds states in future.
 define(
 	'DC_GI_RESUBMIT_STATES',
-	[
+	array(
 		'Crawled - currently not indexed',
 		'Discovered - currently not indexed',
 		'URL is unknown to Google',
 		'', // API returns empty string for completely unknown URLs.
-	]
+	)
 );
 
 // Coverage states where manual QA review is warranted (Google has seen the URL
@@ -52,11 +52,11 @@ define(
 // is excluded because there is nothing actionable for a URL Google has never seen.
 define(
 	'DC_GI_QA_STATES',
-	[
+	array(
 		'Crawled - currently not indexed',
 		'Discovered - currently not indexed',
 		'URL is unknown to Google',
-	]
+	)
 );
 
 /**
@@ -92,22 +92,22 @@ add_filter( 'cron_schedules', 'dc_gi_cron_schedules' );
  */
 function dc_gi_cron_schedules( array $schedules ): array {
 	if ( ! isset( $schedules['dc_gi_every5'] ) ) {
-		$schedules['dc_gi_every5'] = [
+		$schedules['dc_gi_every5'] = array(
 			'interval' => 300, // phpcs:ignore WordPress.WP.CronInterval.CronSchedulesInterval
 			'display'  => __( 'Every 5 Minutes (DC Google Indexing)', 'dc-google-indexing' ),
-		];
+		);
 	}
 	if ( ! isset( $schedules['dc_gi_sixhourly'] ) ) {
-		$schedules['dc_gi_sixhourly'] = [
+		$schedules['dc_gi_sixhourly'] = array(
 			'interval' => 6 * HOUR_IN_SECONDS,
 			'display'  => __( 'Every 6 Hours (DC Google Indexing)', 'dc-google-indexing' ),
-		];
+		);
 	}
 	if ( ! isset( $schedules['dc_gi_every1'] ) ) {
-		$schedules['dc_gi_every1'] = [
+		$schedules['dc_gi_every1'] = array(
 			'interval' => MINUTE_IN_SECONDS,
 			'display'  => __( 'Every 1 Minute (DC Google Indexing)', 'dc-google-indexing' ),
-		];
+		);
 	}
 	return $schedules;
 }
@@ -126,7 +126,7 @@ add_action( 'transition_post_status', 'dc_gi_on_status_change', 10, 3 );
  */
 function dc_gi_on_status_change( string $new_status, string $old_status, WP_Post $post ): void {
 	$settings   = dc_gi_get_settings();
-	$post_types = $settings['post_types'] ?? [ 'post', 'page' ];
+	$post_types = $settings['post_types'] ?? array( 'post', 'page' );
 	if ( ! in_array( $post->post_type, $post_types, true ) ) {
 		return;
 	}
@@ -145,7 +145,7 @@ function dc_gi_on_status_change( string $new_status, string $old_status, WP_Post
 
 	// Transitioning away from publish to draft / private / pending — remove from index.
 	// Controlled by the separate auto_delete toggle (defaults to 1 for backward compat).
-	if ( 'publish' === $old_status && in_array( $new_status, [ 'draft', 'private', 'pending' ], true ) ) {
+	if ( 'publish' === $old_status && in_array( $new_status, array( 'draft', 'private', 'pending' ), true ) ) {
 		$auto_delete = isset( $settings['auto_delete'] ) ? (bool) $settings['auto_delete'] : true;
 		if ( ! $auto_delete ) {
 			return;
@@ -191,7 +191,7 @@ function dc_gi_on_post_trashed( int $post_id, string $previous_status ): void {
 	if ( ! $post ) {
 		return;
 	}
-	$post_types = $settings['post_types'] ?? [ 'post', 'page' ];
+	$post_types = $settings['post_types'] ?? array( 'post', 'page' );
 	if ( ! in_array( $post->post_type, $post_types, true ) ) {
 		return;
 	}
@@ -228,7 +228,7 @@ function dc_gi_on_post_password_set( int $post_id, WP_Post $post_after, WP_Post 
 	if ( ! $auto_delete ) {
 		return;
 	}
-	$post_types = $settings['post_types'] ?? [ 'post', 'page' ];
+	$post_types = $settings['post_types'] ?? array( 'post', 'page' );
 	if ( ! in_array( $post_after->post_type, $post_types, true ) ) {
 		return;
 	}
@@ -238,13 +238,13 @@ function dc_gi_on_post_password_set( int $post_id, WP_Post $post_after, WP_Post 
 	}
 	// Remove any URL_UPDATED entry queued by transition_post_status and replace
 	// it with URL_DELETED — a password-protected post should be de-indexed.
-	$queue   = get_option( 'dc_gi_queue', [] );
+	$queue   = get_option( 'dc_gi_queue', array() );
 	$queue   = array_values( array_filter( $queue, fn( $item ) => $item['url'] !== $url ) );
-	$queue[] = [
+	$queue[] = array(
 		'url'   => esc_url_raw( $url ),
 		'type'  => 'URL_DELETED',
 		'added' => time(),
-	];
+	);
 	update_option( 'dc_gi_queue', $queue, false );
 	wp_cache_delete( 'dc_gi_queue', 'options' ); // Force-bust Redis persistent object cache.
 }
@@ -260,17 +260,17 @@ function dc_gi_on_post_password_set( int $post_id, WP_Post $post_after, WP_Post 
  * @param string $type Notification type: 'URL_UPDATED' or 'URL_DELETED'.
  */
 function dc_gi_enqueue_url( string $url, string $type = 'URL_UPDATED' ): void {
-	$queue = get_option( 'dc_gi_queue', [] );
+	$queue = get_option( 'dc_gi_queue', array() );
 	foreach ( $queue as $item ) {
 		if ( $item['url'] === $url ) {
 			return;
 		}
 	}
-	$queue[] = [
+	$queue[] = array(
 		'url'   => esc_url_raw( $url ),
-		'type'  => in_array( $type, [ 'URL_UPDATED', 'URL_DELETED' ], true ) ? $type : 'URL_UPDATED',
+		'type'  => in_array( $type, array( 'URL_UPDATED', 'URL_DELETED' ), true ) ? $type : 'URL_UPDATED',
 		'added' => time(),
-	];
+	);
 	update_option( 'dc_gi_queue', $queue, false );
 	wp_cache_delete( 'dc_gi_queue', 'options' ); // Force-bust Redis persistent object cache.
 }
@@ -295,7 +295,7 @@ function dc_gi_process_queue(): void {
 		return;
 	}
 
-	$queue = get_option( 'dc_gi_queue', [] );
+	$queue = get_option( 'dc_gi_queue', array() );
 	if ( empty( $queue ) ) {
 		return;
 	}
@@ -308,7 +308,7 @@ function dc_gi_process_queue(): void {
 	// Submit all items in a single batch request to reduce HTTP overhead.
 	$results = DC_GI_JWT::submit_batch( $sa, $batch );
 
-	$failed = [];
+	$failed = array();
 	foreach ( $batch as $item ) {
 		$result = $results[ $item['url'] ] ?? new WP_Error( 'dc_gi_no_response', __( 'No response received.', 'dc-google-indexing' ) );
 		dc_gi_add_log( $item['url'], $item['type'], $result );
@@ -322,7 +322,7 @@ function dc_gi_process_queue(): void {
 	// Re-add failed items to the front of the queue so they are retried on the
 	// next run rather than being silently dropped.
 	if ( ! empty( $failed ) ) {
-		$current_queue = get_option( 'dc_gi_queue', [] );
+		$current_queue = get_option( 'dc_gi_queue', array() );
 		$existing_urls = array_column( $current_queue, 'url' );
 		foreach ( array_reverse( $failed ) as $item ) {
 			if ( ! in_array( $item['url'], $existing_urls, true ) ) {
@@ -347,14 +347,14 @@ function dc_gi_process_queue(): void {
  */
 function dc_gi_add_log( string $url, string $type, $result ): void {
 	dc_gi_push_log_entry(
-		[
+		array(
 			'url'    => $url,
 			'type'   => $type,
 			'status' => is_wp_error( $result ) ? 'error' : 'ok',
 			'detail' => is_wp_error( $result )
 				? $result->get_error_message()
 				: ( $result['urlNotificationMetadata']['latestUpdate']['type'] ?? 'submitted' ),
-		]
+		)
 	);
 
 	// On successful submission, add to watchlist to track indexing / removal.
@@ -378,12 +378,12 @@ function dc_gi_add_log( string $url, string $type, $result ): void {
  */
 function dc_gi_log_info( string $url, string $type, string $detail ): void {
 	dc_gi_push_log_entry(
-		[
+		array(
 			'url'    => $url,
 			'type'   => $type,
 			'status' => 'info',
 			'detail' => $detail,
-		]
+		)
 	);
 }
 
@@ -399,7 +399,7 @@ function dc_gi_log_info( string $url, string $type, string $detail ): void {
  * @param string $status Initial watchlist status ('pending' or 'removal_pending').
  */
 function dc_gi_watchlist_add( string $url, string $status = 'pending' ): void {
-	$list = get_option( 'dc_gi_watchlist', [] );
+	$list = get_option( 'dc_gi_watchlist', array() );
 	foreach ( $list as &$entry ) {
 		if ( $entry['url'] === $url ) {
 			// If re-submitted for deletion, upgrade existing entry status.
@@ -421,13 +421,13 @@ function dc_gi_watchlist_add( string $url, string $status = 'pending' ): void {
 	unset( $entry );
 	array_unshift(
 		$list,
-		[
+		array(
 			'url'          => esc_url_raw( $url ),
 			'submitted_at' => time(),
-			'status'       => in_array( $status, [ 'pending', 'removal_pending' ], true ) ? $status : 'pending',
+			'status'       => in_array( $status, array( 'pending', 'removal_pending' ), true ) ? $status : 'pending',
 			'last_checked' => 0,
 			'coverage'     => '',
-		]
+		)
 	);
 	// Cap at 500 entries — oldest drop off the bottom.
 	dc_gi_update_option( 'dc_gi_watchlist', array_slice( $list, 0, 500 ) );
@@ -439,7 +439,7 @@ function dc_gi_watchlist_add( string $url, string $status = 'pending' ): void {
  * @param string $url Fully qualified URL to remove.
  */
 function dc_gi_watchlist_remove( string $url ): void {
-	$list = get_option( 'dc_gi_watchlist', [] );
+	$list = get_option( 'dc_gi_watchlist', array() );
 	$list = array_values( array_filter( $list, fn( $e ) => $e['url'] !== $url ) );
 	dc_gi_update_option( 'dc_gi_watchlist', $list );
 }
@@ -448,7 +448,7 @@ function dc_gi_watchlist_remove( string $url ): void {
  * Return all URLs currently in the watchlist.
  */
 function dc_gi_watchlist_get(): array {
-	return (array) get_option( 'dc_gi_watchlist', [] );
+	return (array) get_option( 'dc_gi_watchlist', array() );
 }
 
 /**
@@ -458,7 +458,7 @@ function dc_gi_watchlist_get(): array {
  * @param string $url Fully qualified URL to flag for manual QA.
  */
 function dc_gi_qa_pending_add( string $url ): void {
-	$pending = (array) get_option( 'dc_gi_qa_pending', [] );
+	$pending = (array) get_option( 'dc_gi_qa_pending', array() );
 	if ( ! in_array( $url, $pending, true ) ) {
 		$pending[] = $url;
 		update_option( 'dc_gi_qa_pending', $pending, false );
@@ -478,7 +478,7 @@ function dc_gi_get_sitemap_urls_cached(): array {
 	}
 	$urls = DC_GI_Sitemap::get_urls( 2000 );
 	if ( is_wp_error( $urls ) ) {
-		return [];
+		return array();
 	}
 	set_transient( 'dc_gi_sitemap_urls_cache', $urls, 5 * MINUTE_IN_SECONDS );
 	return $urls;
@@ -487,7 +487,8 @@ function dc_gi_get_sitemap_urls_cached(): array {
 add_action( DC_GI_WATCH_HOOK, 'dc_gi_run_watchlist_check' );
 /**
  * WP-Cron callback: inspect pending watchlist URLs via the URL Inspection API.
- * Updates coverage state, marks indexed/removed entries, and re-submits stale URLs.
+ * Updates coverage state and marks indexed/removed entries.
+ * Submission is handled exclusively by the Inspection Cron (dc_gi_run_inspect_batch).
  */
 function dc_gi_run_watchlist_check(): void {
 	$settings = dc_gi_get_settings();
@@ -496,22 +497,18 @@ function dc_gi_run_watchlist_check(): void {
 		return;
 	}
 
-	// When the daily Indexing API quota is exhausted, skip re-submissions but
-	// still update coverage states so the watchlist stays current.
-	$quota_ok = ! dc_gi_is_quota_exhausted();
-
 	$site_url     = dc_gi_get_search_console_property( $settings );
-	$list         = get_option( 'dc_gi_watchlist', [] );
+	$list         = get_option( 'dc_gi_watchlist', array() );
 	$updated      = false;
 	$checked      = 0;
 	$sitemap_urls = null; // Lazy-load on first resubmit candidate.
 
-	$done_statuses = [ 'indexed', 'removed' ];
+	$done_statuses = array( 'indexed', 'removed' );
 
 	// Build a prioritised processing order: sort pending entries by last_checked
 	// ascending so URLs that have never been checked (last_checked = 0) or
 	// were checked longest ago are inspected first.
-	$pending_keys = [];
+	$pending_keys = array();
 	foreach ( $list as $k => $entry ) {
 		if ( ! in_array( $entry['status'], $done_statuses, true ) ) {
 			$pending_keys[ $k ] = $entry['last_checked'];
@@ -553,7 +550,7 @@ function dc_gi_run_watchlist_check(): void {
 		if ( 'removed' === $new_status || 'indexed' === $new_status ) {
 			$list[ $k ]['status'] = $new_status;
 		} elseif ( 'resubmit' === $new_status ) {
-			// Before re-submitting, verify the URL is still in the sitemap.
+			// Before updating status, verify the URL is still in the sitemap.
 			// If it has been removed from the site, auto-delete it from the
 			// watchlist and add an informational log entry instead.
 			if ( null === $sitemap_urls ) {
@@ -568,17 +565,8 @@ function dc_gi_run_watchlist_check(): void {
 				unset( $list[ $k ] );
 				continue;
 			}
-			// Only re-submit if the daily Indexing API quota has not been exhausted
-			// and at least one hour has elapsed since the last submission — this
-			// prevents Check Now from immediately re-populating the queue with URLs
-			// that were just submitted and haven't been crawled by Google yet.
-			if ( $quota_ok && time() - (int) ( $list[ $k ]['submitted_at'] ?? 0 ) > HOUR_IN_SECONDS ) {
-				// Google has not indexed the URL yet — re-submit via Indexing API to
-				// signal it is ready. This covers unknown, discovered, and crawled-but-
-				// not-indexed states, giving Google a stronger hint to prioritise it.
-				dc_gi_enqueue_url( $list[ $k ]['url'], 'URL_UPDATED' );
-			}
 			// Flag for manual QA when Google has seen the URL but not indexed it yet.
+			// Submission is handled by the Inspection Cron, not here.
 			if ( in_array( $coverage, DC_GI_QA_STATES, true ) ) {
 				dc_gi_qa_pending_add( $list[ $k ]['url'] );
 			}
@@ -591,160 +579,17 @@ function dc_gi_run_watchlist_check(): void {
 }
 
 // =============================================================================
-// POLLING BATCH — reads URL cache, submits excluded URLs (no API calls here)
-// =============================================================================
-
-add_action( DC_GI_POLL_HOOK, 'dc_gi_run_poll_batch' );
-/**
- * WP-Cron callback: read excluded URLs from the inspection cache and enqueue them for submission.
- *
- * @param bool $force Skip the active-flag check when triggered manually.
- * @return string Status string such as 'ok', 'cycle_complete', 'early:not_active', 'early:locked', 'early:cache_empty'.
- */
-function dc_gi_run_poll_batch( bool $force = false ): string {
-	// Only run when polling is active (skip check when forced via manual trigger).
-	if ( ! $force && ! get_option( 'dc_gi_poll_active', false ) ) {
-		return 'early:not_active';
-	}
-	// Simple lock to prevent concurrent cron + AJAX runs.
-	if ( get_transient( 'dc_gi_poll_lock' ) ) {
-		return 'early:locked';
-	}
-	set_transient( 'dc_gi_poll_lock', 1, 30 );
-
-	try {
-		// The inspection cache must be populated before polling can begin.
-		// The DC_GI_INSPECT_HOOK cron fills it in the background.
-		$cache_total = DC_GI_URL_Cache::count_total();
-		if ( 0 === $cache_total ) {
-			return 'early:cache_empty';
-		}
-
-		$poll_seen         = (array) get_option( 'dc_gi_poll_seen', [] );
-		$poll_seen_initial = $poll_seen; // Snapshot to detect mid-batch resets.
-		// Skip only URLs already processed in this cycle — the watchlist is intentionally
-		// excluded from the skip list so polling can re-submit watchlist-tracked URLs that
-		// Google still hasn't indexed. dc_gi_enqueue_url() is idempotent and handles
-		// queue-level deduplication, so there is no risk of duplicate submissions.
-		$skip_urls = $poll_seen;
-
-		// Up to 5 URLs per batch — keeps each run small so the cron processes URLs incrementally
-		// and the interactive long-poll session stays within PHP's execution time budget.
-		$batch_size = 5;
-		$candidates = DC_GI_URL_Cache::get_excluded_urls( $batch_size, $skip_urls );
-
-		if ( empty( $candidates ) ) {
-			// Full cycle done — deactivate polling so the cron does not restart automatically.
-			// The user must click "Start Polling" again to begin a fresh cycle.
-			dc_gi_set_poll_active( false );
-			delete_option( 'dc_gi_poll_seen' );
-			$cache_excluded = DC_GI_URL_Cache::count_excluded();
-			set_transient(
-				'dc_gi_last_poll',
-				array_merge(
-					(array) get_transient( 'dc_gi_last_poll' ),
-					[
-						'cycle_seen'      => count( $poll_seen ),
-						'cycle_total'     => max( $cache_excluded, count( $poll_seen ) ),
-						'cycle_done'      => true,
-						'cycle_inspected' => count( $poll_seen ), // Backward-compat field.
-						'source'          => 'cache',
-					]
-				),
-				DAY_IN_SECONDS
-			);
-			return 'cycle_complete';
-		}
-
-		$queued     = 0;
-		$skipped    = 0;
-		$errors     = 0;
-		$newly_seen = [];
-
-		foreach ( $candidates as $url ) {
-			$entry        = DC_GI_URL_Cache::get_entry( $url );
-			$coverage     = $entry['coverage_state'] ?? '';
-			$newly_seen[] = $url;
-
-			// Log 404s for visibility but skip submission — submitting them is pointless.
-			if ( in_array( $coverage, [ 'Not found (404)', 'Soft 404' ], true ) ) {
-				++$skipped;
-				dc_gi_log_info(
-					$url,
-					'POLL_404',
-					/* translators: %s: Google coverage state (e.g. 'Not found (404)') */
-					sprintf( __( '%s during polling — skipped submission', 'dc-google-indexing' ), $coverage )
-				);
-				continue;
-			}
-
-			dc_gi_enqueue_url( $url, 'URL_UPDATED' );
-			DC_GI_URL_Cache::mark_submitted( $url );
-			++$queued;
-		}
-
-		// Advance cursor.
-		$poll_seen   = array_values( array_unique( array_merge( $poll_seen, $newly_seen ) ) );
-		$cycle_seen  = count( $poll_seen );
-		$cache_excl  = DC_GI_URL_Cache::count_excluded();
-		$cycle_total = max( $cache_excl, $cycle_seen );
-		$cycle_done  = false;
-
-		// Carry forward cumulative cycle totals from previous batches.
-		$prev          = (array) get_transient( 'dc_gi_last_poll' );
-		$cycle_queued  = ( $prev['cycle_queued'] ?? 0 ) + $queued;
-		$cycle_skipped = ( $prev['cycle_skipped'] ?? 0 ) + $skipped;
-		$cycle_errors  = ( $prev['cycle_errors'] ?? 0 ) + $errors;
-
-		// Detect if a Reset Cycle happened while this batch was running.
-		if ( ! empty( $poll_seen_initial ) ) {
-			global $wpdb;
-			$fresh_seen = $wpdb->get_var(
-				$wpdb->prepare(
-					"SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1",
-					'dc_gi_poll_seen'
-				)
-			);
-			if ( null === $fresh_seen ) {
-				return 'ok:reset_detected';
-			}
-		}
-
-		update_option( 'dc_gi_poll_seen', $poll_seen, false );
-
-		set_transient(
-			'dc_gi_last_poll',
-			[
-				'time'            => time(),
-				'queued'          => $queued,
-				'skipped'         => $skipped,
-				'errors'          => $errors,
-				'cycle_queued'    => $cycle_queued,
-				'cycle_skipped'   => $cycle_skipped,
-				'cycle_errors'    => $cycle_errors,
-				'cycle_inspected' => $cycle_seen,  // Backward-compat — repurposed as "seen from cache".
-				'cycle_seen'      => $cycle_seen,
-				'cycle_total'     => $cycle_total,
-				'cycle_done'      => $cycle_done,
-				'source'          => 'cache',
-			],
-			DAY_IN_SECONDS
-		);
-
-		return 'ok';
-
-	} finally {
-		delete_transient( 'dc_gi_poll_lock' );
-	}
-}
-
-// =============================================================================
 // INSPECTION BATCH — populate URL cache from sitemap via GSC Inspection API
 // =============================================================================
 
 add_action( DC_GI_INSPECT_HOOK, 'dc_gi_run_inspect_batch' );
 /**
  * WP-Cron callback: run one inspection batch to populate the URL cache from the sitemap.
+ *
+ * After each successful inspection, any URL still in a NEUTRAL or
+ * VERDICT_UNSPECIFIED state that has not been submitted within the last 24 hours
+ * is automatically enqueued for submission via the Indexing API — replacing the
+ * former separate Polling loop.
  *
  * Returns the status string from DC_GI_URL_Cache::run_inspect_batch(), or
  * 'early:no_sa' when service-account credentials are missing/invalid.
@@ -767,7 +612,8 @@ function dc_gi_run_inspect_batch(): string {
 		}
 		return 'early:no_sa';
 	}
-	$status = DC_GI_URL_Cache::run_inspect_batch( $sa );
+	$result = DC_GI_URL_Cache::run_inspect_batch( $sa );
+	$status = $result['status'];
 	if ( 'early:quota_backoff' === $status ) {
 		// URL Inspection API quota is temporarily exhausted — cron will retry after backoff expires.
 		return $status;
@@ -776,7 +622,30 @@ function dc_gi_run_inspect_batch(): string {
 			dc_gi_log_info( '', 'INSPECT_SITEMAP_ERR', __( 'Inspection cache not building — no URLs found in sitemap.', 'dc-google-indexing' ) );
 			set_transient( 'dc_gi_inspect_sitemap_warn', 1, HOUR_IN_SECONDS );
 		}
+		return $status;
 	}
+
+	// Inline submission: for each URL inspected this run, enqueue it for the
+	// Indexing API if its verdict indicates it needs indexing and it has not been
+	// submitted within the last 24 hours.  This replaces the former Polling loop.
+	if ( ! empty( $result['upserted'] ) && ! dc_gi_is_quota_exhausted() ) {
+		foreach ( $result['upserted'] as $url => $coverage_state ) {
+			if ( ! in_array( $coverage_state, DC_GI_RESUBMIT_STATES, true ) ) {
+				continue;
+			}
+			$row      = DC_GI_URL_Cache::get_entry( $url );
+			$last_str = $row ? ( $row['last_submitted'] ?? '' ) : '';
+			$last_ts  = $last_str ? (int) strtotime( $last_str ) : 0;
+			if ( time() - $last_ts > DAY_IN_SECONDS ) {
+				dc_gi_enqueue_url( $url, 'URL_UPDATED' );
+				DC_GI_URL_Cache::mark_submitted( $url );
+				wp_schedule_single_event( time(), DC_GI_INSPECT_SIGNAL_HOOK, array( $url ) );
+				spawn_cron();
+				dc_gi_log_info( $url, 'AUTO_SUBMIT', 'Auto-submitted from inspection: ' . $coverage_state );
+			}
+		}
+	}
+
 	return $status;
 }
 
@@ -848,7 +717,7 @@ function dc_gi_cron_inspection_signal( string $url ): void {
  * @return array Plugin settings (empty array when not yet saved).
  */
 function dc_gi_get_settings(): array {
-	return (array) get_option( 'dc_gi_settings', [] );
+	return (array) get_option( 'dc_gi_settings', array() );
 }
 
 /**
@@ -873,7 +742,7 @@ function dc_gi_normalize_search_console_property( string $value ): string {
 		return $domain ? 'sc-domain:' . $domain : '';
 	}
 
-	$url = esc_url_raw( $value, [ 'http', 'https' ] );
+	$url = esc_url_raw( $value, array( 'http', 'https' ) );
 	if ( ! $url ) {
 		return '';
 	}
@@ -898,32 +767,6 @@ function dc_gi_get_search_console_property( ?array $settings = null ): string {
 	}
 
 	return trailingslashit( get_home_url() );
-}
-
-/**
- * Reliably write dc_gi_poll_active and ensure the value is immediately visible
- * to subsequent get_option() calls within the same request.
- *
- * Uses update_option() / add_option() instead of raw $wpdb queries so WordPress's
- * options cache (including the autoloaded alloptions bucket) is properly invalidated.
- * The row-existence check is kept via $wpdb so the correct API is used for each case.
- *
- * @param bool $active True to activate polling, false to deactivate.
- */
-function dc_gi_set_poll_active( bool $active ): void {
-	global $wpdb;
-	$value  = $active ? '1' : '';
-	$exists = (int) $wpdb->get_var(
-		$wpdb->prepare(
-			"SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name = %s",
-			'dc_gi_poll_active'
-		)
-	);
-	if ( $exists ) {
-		update_option( 'dc_gi_poll_active', $value, 'yes' );
-	} else {
-		add_option( 'dc_gi_poll_active', $value, '', 'yes' );
-	}
 }
 
 /**
@@ -997,8 +840,8 @@ function dc_gi_update_option( string $option, $value ): bool {
  * @param array $entry Associative array of log fields (url, type, status, detail).
  */
 function dc_gi_push_log_entry( array $entry ): void {
-	$log = get_option( 'dc_gi_log', [] );
-	array_unshift( $log, array_merge( [ 'time' => time() ], $entry ) );
+	$log = get_option( 'dc_gi_log', array() );
+	array_unshift( $log, array_merge( array( 'time' => time() ), $entry ) );
 	update_option( 'dc_gi_log', array_slice( $log, 0, 100 ), false );
 }
 
@@ -1033,7 +876,7 @@ function dc_gi_cleanup_watch_check(): void {
  */
 function dc_gi_resolve_watchlist_status( string $current_status, string $coverage ): string {
 	if ( 'removal_pending' === $current_status ) {
-		$removed_coverage = [ '', 'URL is unknown to Google', 'Not found (404)', 'Soft 404' ];
+		$removed_coverage = array( '', 'URL is unknown to Google', 'Not found (404)', 'Soft 404' );
 		return in_array( $coverage, $removed_coverage, true ) ? 'removed' : '';
 	}
 	if ( 'Submitted and indexed' === $coverage || 'Indexed, not submitted in sitemap' === $coverage ) {
@@ -1061,9 +904,6 @@ function dc_gi_activate(): void {
 	}
 	if ( ! wp_next_scheduled( DC_GI_WATCH_HOOK ) ) {
 		wp_schedule_event( time() + 300, 'dc_gi_sixhourly', DC_GI_WATCH_HOOK );
-	}
-	if ( ! wp_next_scheduled( DC_GI_POLL_HOOK ) ) {
-		wp_schedule_event( time() + 60, 'dc_gi_every1', DC_GI_POLL_HOOK );
 	}
 	if ( ! wp_next_scheduled( DC_GI_INSPECT_HOOK ) ) {
 		wp_schedule_event( time() + 90, 'dc_gi_every1', DC_GI_INSPECT_HOOK );
@@ -1098,11 +938,7 @@ function dc_gi_maybe_reschedule_crons(): void {
 	if ( ! wp_next_scheduled( DC_GI_WATCH_HOOK ) ) {
 		wp_schedule_event( time() + 300, 'dc_gi_sixhourly', DC_GI_WATCH_HOOK );
 	}
-	// Stagger by 1 min so polling cron does not collide with queue cron at t=0.
-	if ( ! wp_next_scheduled( DC_GI_POLL_HOOK ) ) {
-		wp_schedule_event( time() + 60, 'dc_gi_every1', DC_GI_POLL_HOOK );
-	}
-	// Inspection cron: stagger by 90s so it doesn't fire at the same time as polling.
+	// Inspection cron: stagger by 90s so it doesn't fire at the same time as the queue cron.
 	if ( ! wp_next_scheduled( DC_GI_INSPECT_HOOK ) ) {
 		wp_schedule_event( time() + 90, 'dc_gi_every1', DC_GI_INSPECT_HOOK );
 	}
@@ -1139,11 +975,11 @@ function dc_gi_run_watch_check_one_cron(): void {
 
 	$offset   = (int) get_option( 'dc_gi_watch_offset', 0 );
 	$site_url = dc_gi_get_search_console_property( $settings );
-	$list     = get_option( 'dc_gi_watchlist', [] );
+	$list     = get_option( 'dc_gi_watchlist', array() );
 	$keys     = array_keys( $list );
 	$total    = count( $keys );
 
-	$done_statuses = [ 'indexed', 'removed' ];
+	$done_statuses = array( 'indexed', 'removed' );
 
 	// Advance past already-done entries.
 	while ( $offset < $total && in_array( $list[ $keys[ $offset ] ]['status'] ?? '', $done_statuses, true ) ) {
@@ -1182,7 +1018,7 @@ function dc_gi_run_watch_check_one_cron(): void {
 		if ( 'removed' === $new_status || 'indexed' === $new_status ) {
 			$entry['status'] = $new_status;
 		} elseif ( 'resubmit' === $new_status ) {
-			// Before re-submitting, check that the URL is still in the sitemap.
+			// Before updating status, check that the URL is still in the sitemap.
 			$sitemap_urls = dc_gi_get_sitemap_urls_cached();
 			if ( ! empty( $sitemap_urls ) && ! in_array( $entry['url'], $sitemap_urls, true ) ) {
 				$entry_url = $entry['url'];
@@ -1209,15 +1045,8 @@ function dc_gi_run_watch_check_one_cron(): void {
 				}
 				return;
 			}
-			// Re-enqueue only when enough time has elapsed since the last submission —
-			// prevents immediately re-populating the queue with freshly submitted URLs
-			// that Google has not yet had a chance to crawl.
-			if ( time() - (int) ( $entry['submitted_at'] ?? 0 ) > HOUR_IN_SECONDS ) {
-				dc_gi_enqueue_url( $entry['url'], 'URL_UPDATED' );
-				$entry['coverage']  = ( ! empty( $coverage ) ) ? $coverage : 'URL is unknown to Google';
-				$entry['coverage'] .= ' (re-queued for submission)';
-			}
 			// Flag for manual QA when Google has seen the URL but not indexed it yet.
+			// Submission is handled by the Inspection Cron, not here.
 			if ( in_array( $coverage, DC_GI_QA_STATES, true ) ) {
 				dc_gi_qa_pending_add( $entry['url'] );
 			}
@@ -1251,10 +1080,8 @@ function dc_gi_deactivate(): void {
 	wp_clear_scheduled_hook( DC_GI_CRON_HOOK );
 	wp_clear_scheduled_hook( DC_GI_WATCH_HOOK );
 	wp_clear_scheduled_hook( DC_GI_WATCH_CHECK_HOOK );
-	wp_clear_scheduled_hook( DC_GI_POLL_HOOK );
 	wp_clear_scheduled_hook( DC_GI_INSPECT_HOOK );
 	wp_clear_scheduled_hook( DC_GI_ANALYTICS_HOOK );
-	update_option( 'dc_gi_poll_active', false );
 	delete_option( 'dc_gi_watch_active' );
 	delete_option( 'dc_gi_watch_offset' );
 }
