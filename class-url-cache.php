@@ -98,6 +98,7 @@ class DC_GI_URL_Cache {
 		// dbDelta is unreliable when adding columns to tables that already have rows.
 		// Explicitly add any columns that may have been skipped.
 		self::maybe_upgrade_columns();
+		self::maybe_add_indexes();
 	}
 
 	/**
@@ -151,68 +152,39 @@ class DC_GI_URL_Cache {
 		$wpdb->query( 'DROP TABLE IF EXISTS ' . self::table() ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 	}
 
+	/**
+	 * Add performance indexes if they do not already exist.
+	 * Safe to call repeatedly — checks information_schema before altering.
+	 */
+	private static function maybe_add_indexes(): void {
+		global $wpdb;
+		$table   = self::table();
+		$indexes = array(
+			'idx_last_inspected' => 'last_inspected',
+			'idx_index_verdict'  => 'index_verdict(30)',
+		);
+		foreach ( $indexes as $name => $col ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+			$exists = (int) $wpdb->get_var(
+				$wpdb->prepare(
+					'SELECT COUNT(*) FROM information_schema.statistics
+					  WHERE table_schema = DATABASE()
+					    AND table_name = %s
+					    AND index_name = %s',
+					$table,
+					$name
+				)
+			);
+			if ( ! $exists ) {
+				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.SchemaChange,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+				$wpdb->query( "ALTER TABLE `{$table}` ADD INDEX `{$name}` ({$col})" );
+			}
+		}
+	}
+
 	// =========================================================================
 	// READ
 	// =========================================================================
-
-	/**
-	 * Return URLs whose Google index status is NOT "PASS", i.e. they are
-	 * excluded / not yet indexed.  Filters out $skip_urls and honours an
-	 * optional freshness cutoff.
-	 *
-	 * @param int      $limit      Maximum number of URLs to return.
-	 * @param string[] $skip_urls  URLs to exclude from the result (watchlisted, etc.).
-	 * @param int      $max_age_s  Only return rows inspected within this many seconds.
-	 *                             Defaults to DC_GI_CACHE_TTL.  Pass 0 to skip TTL check.
-	 * @return string[]
-	 */
-	public static function get_excluded_urls( int $limit, array $skip_urls = array(), int $max_age_s = 0 ): array {
-		global $wpdb;
-
-		if ( $max_age_s <= 0 ) {
-			$max_age_s = DC_GI_CACHE_TTL;
-		}
-
-		$cutoff   = gmdate( 'Y-m-d H:i:s', time() - $max_age_s );
-		$not_like = $wpdb->esc_like( 'inspect_error:' ) . '%';
-
-		// Build NOT IN clause safely.
-		if ( ! empty( $skip_urls ) ) {
-			$placeholders = implode( ',', array_fill( 0, count( $skip_urls ), '%s' ) );
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
-			$rows = $wpdb->get_col(
-				// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber
-				$wpdb->prepare(
-					"SELECT url FROM `{$wpdb->prefix}dc_gi_url_cache`
-				  WHERE index_verdict IN ('NEUTRAL','VERDICT_UNSPECIFIED')
-				    AND last_inspected >= %s
-				    AND coverage_state NOT LIKE %s
-				    AND url NOT IN ({$placeholders})
-				  ORDER BY last_inspected ASC
-				  LIMIT %d",
-					array_merge( array( $cutoff, $not_like ), $skip_urls, array( $limit ) )
-				)
-				// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber
-			);
-		} else {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
-			$rows = $wpdb->get_col(
-				$wpdb->prepare(
-					"SELECT url FROM `{$wpdb->prefix}dc_gi_url_cache`
-				  WHERE index_verdict IN ('NEUTRAL','VERDICT_UNSPECIFIED')
-				    AND last_inspected >= %s
-				    AND coverage_state NOT LIKE %s
-				  ORDER BY last_inspected ASC
-				  LIMIT %d",
-					$cutoff,
-					$not_like,
-					$limit
-				)
-			);
-		}
-
-		return $rows ? (array) $rows : array();
-	}
 
 	/**
 	 * Return the number of URLs in the cache that need submission (NEUTRAL or VERDICT_UNSPECIFIED).
@@ -308,6 +280,31 @@ class DC_GI_URL_Cache {
 			ARRAY_A
 		);
 		return $row;
+	}
+
+	/**
+	 * Fetch multiple cache rows in a single query, keyed by URL.
+	 *
+	 * @param string[] $urls List of fully qualified URLs to look up.
+	 * @return array<string, array> Map of url => row (same shape as get_entry()).
+	 */
+	public static function get_entries_batch( array $urls ): array {
+		if ( empty( $urls ) ) {
+			return array();
+		}
+		global $wpdb;
+		$placeholders = implode( ',', array_fill( 0, count( $urls ), '%s' ) );
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber
+				"SELECT * FROM `{$wpdb->prefix}dc_gi_url_cache` WHERE url IN ({$placeholders})",
+				$urls
+				// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber
+			),
+			ARRAY_A
+		);
+		return $rows ? array_column( $rows, null, 'url' ) : array();
 	}
 
 	// =========================================================================
@@ -424,20 +421,24 @@ class DC_GI_URL_Cache {
 	 */
 	public static function upsert_analytics( string $url, array $fields ): void {
 		global $wpdb;
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
-		$wpdb->update(
-			self::table(),
-			array(
-				'sa_clicks'      => (int) ( $fields['sa_clicks'] ?? 0 ),
-				'sa_impressions' => (int) ( $fields['sa_impressions'] ?? 0 ),
-				'sa_ctr'         => (float) ( $fields['sa_ctr'] ?? 0.0 ),
-				'sa_position'    => (float) ( $fields['sa_position'] ?? 0.0 ),
-				'sa_updated'     => gmdate( 'Y-m-d H:i:s' ),
-			),
-			array( 'url' => $url ),
-			array( '%d', '%d', '%f', '%f', '%s' ),
-			array( '%s' )
+		$data    = array(
+			'sa_clicks'      => (int) ( $fields['sa_clicks'] ?? 0 ),
+			'sa_impressions' => (int) ( $fields['sa_impressions'] ?? 0 ),
+			'sa_ctr'         => (float) ( $fields['sa_ctr'] ?? 0.0 ),
+			'sa_position'    => (float) ( $fields['sa_position'] ?? 0.0 ),
+			'sa_updated'     => gmdate( 'Y-m-d H:i:s' ),
 		);
+		$formats = array( '%d', '%d', '%f', '%f', '%s' );
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		$wpdb->update( self::table(), $data, array( 'url' => $url ), $formats, array( '%s' ) );
+
+		if ( ! $wpdb->rows_affected ) {
+			// Retry with trailing slash toggled — Google canonical may differ from sitemap form.
+			$alt_url = str_ends_with( $url, '/' ) ? rtrim( $url, '/' ) : $url . '/';
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+			$wpdb->update( self::table(), $data, array( 'url' => $alt_url ), $formats, array( '%s' ) );
+		}
 	}
 
 	/**

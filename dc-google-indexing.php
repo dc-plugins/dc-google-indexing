@@ -6,7 +6,7 @@
  * Plugin Name: DC Google Indexing
  * Plugin URI:  https://github.com/dc-plugins/dc-google-indexing
  * Description: Submit URLs to Google's Web Search Indexing API for instant crawling. Supports manual batch submission and automatic submission on publish/update.
- * Version:     1.5.0
+ * Version:     1.5.1
  * Author:      lennilg
  * Author URI:  https://www.dampcig.dk
  * License:     GPL-2.0+
@@ -21,7 +21,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'DC_GI_VERSION', '1.5.0' );
+define( 'DC_GI_VERSION', '1.5.1' );
 define( 'DC_GI_DB_VERSION', '1.4.0' ); // Increment when the URL-cache table schema changes.
 define( 'DC_GI_FILE', __FILE__ );
 define( 'DC_GI_DIR', plugin_dir_path( __FILE__ ) );
@@ -261,10 +261,8 @@ function dc_gi_on_post_password_set( int $post_id, WP_Post $post_after, WP_Post 
  */
 function dc_gi_enqueue_url( string $url, string $type = 'URL_UPDATED' ): void {
 	$queue = get_option( 'dc_gi_queue', array() );
-	foreach ( $queue as $item ) {
-		if ( $item['url'] === $url ) {
-			return;
-		}
+	if ( in_array( $url, array_column( $queue, 'url' ), true ) ) {
+		return;
 	}
 	$queue[] = array(
 		'url'   => esc_url_raw( $url ),
@@ -357,8 +355,9 @@ function dc_gi_add_log( string $url, string $type, $result ): void {
 		)
 	);
 
-	// On successful submission, add to watchlist to track indexing / removal.
+	// On successful submission, stamp last_submitted and add to watchlist.
 	if ( ! is_wp_error( $result ) ) {
+		DC_GI_URL_Cache::mark_submitted( $url );
 		if ( 'URL_DELETED' === $type ) {
 			dc_gi_watchlist_add( $url, 'removal_pending' );
 		} else {
@@ -486,6 +485,54 @@ function dc_gi_get_sitemap_urls_cached(): array {
 
 add_action( DC_GI_WATCH_HOOK, 'dc_gi_run_watchlist_check' );
 /**
+ * Apply a DC_GI_JWT::inspect_url() result to a single watchlist entry in-place.
+ * Shared by dc_gi_run_watchlist_check() and dc_gi_run_watch_check_one_cron().
+ *
+ * @param array      $entry        Watchlist entry, modified in-place by reference.
+ * @param mixed      $result       inspect_url() return value (array or WP_Error).
+ * @param array|null $sitemap_urls Sitemap URL list; null triggers lazy-load on first resubmit candidate.
+ * @return string 'updated' | 'removed_from_watchlist' | 'quota_hit' | 'error'
+ */
+function dc_gi_apply_watchlist_inspect_result( array &$entry, $result, ?array &$sitemap_urls ): string {
+	if ( is_wp_error( $result ) ) {
+		if ( 'dc_gi_inspect_quota_exceeded' === $result->get_error_code() ) {
+			return 'quota_hit';
+		}
+		$entry['last_checked'] = time();
+		$entry['coverage']     = 'error: ' . $result->get_error_message();
+		$entry['status']       = 'error';
+		return 'error';
+	}
+
+	$entry['last_checked'] = time();
+	$coverage              = $result['inspectionResult']['indexStatusResult']['coverageState'] ?? '';
+	$entry['coverage']     = $coverage;
+	DC_GI_URL_Cache::upsert( $entry['url'], DC_GI_URL_Cache::parse_api_result( $result ) );
+
+	$new_status = dc_gi_resolve_watchlist_status( $entry['status'], $coverage );
+
+	if ( 'removed' === $new_status || 'indexed' === $new_status ) {
+		$entry['status'] = $new_status;
+		return 'updated';
+	}
+
+	if ( 'resubmit' === $new_status ) {
+		if ( null === $sitemap_urls ) {
+			$sitemap_urls = dc_gi_get_sitemap_urls_cached();
+		}
+		if ( ! empty( $sitemap_urls ) && ! in_array( $entry['url'], $sitemap_urls, true ) ) {
+			return 'removed_from_watchlist';
+		}
+		if ( in_array( $coverage, DC_GI_QA_STATES, true ) ) {
+			dc_gi_qa_pending_add( $entry['url'] );
+		}
+	}
+
+	$entry['status'] = 'pending';
+	return 'updated';
+}
+
+/**
  * WP-Cron callback: inspect pending watchlist URLs via the URL Inspection API.
  * Updates coverage state and marks indexed/removed entries.
  * Submission is handled exclusively by the Inspection Cron (dc_gi_run_inspect_batch).
@@ -522,54 +569,24 @@ function dc_gi_run_watchlist_check(): void {
 		}
 
 		$result = DC_GI_JWT::inspect_url( $sa, $list[ $k ]['url'], $site_url );
+		$apply  = dc_gi_apply_watchlist_inspect_result( $list[ $k ], $result, $sitemap_urls );
 
-		if ( is_wp_error( $result ) ) {
-			if ( 'dc_gi_inspect_quota_exceeded' === $result->get_error_code() ) {
-				// Quota hit mid-batch — don't record last_checked so the URL retries next run.
-				break;
-			}
-			$list[ $k ]['last_checked'] = time();
-			++$checked;
-			$updated                = true;
-			$list[ $k ]['coverage'] = 'error: ' . $result->get_error_message();
-			continue;
+		if ( 'quota_hit' === $apply ) {
+			// Quota hit mid-batch — don't record last_checked so the URL retries next run.
+			break;
 		}
 
-		$list[ $k ]['last_checked'] = time();
 		++$checked;
 		$updated = true;
 
-		$coverage               = $result['inspectionResult']['indexStatusResult']['coverageState'] ?? '';
-		$list[ $k ]['coverage'] = $coverage;
-
-		// Sync the URL cache with this fresh result — keeps "need submission" counts
-		// accurate without waiting for the background inspection cron to re-visit.
-		DC_GI_URL_Cache::upsert( $list[ $k ]['url'], DC_GI_URL_Cache::parse_api_result( $result ) );
-
-		$new_status = dc_gi_resolve_watchlist_status( $list[ $k ]['status'], $coverage );
-		if ( 'removed' === $new_status || 'indexed' === $new_status ) {
-			$list[ $k ]['status'] = $new_status;
-		} elseif ( 'resubmit' === $new_status ) {
-			// Before updating status, verify the URL is still in the sitemap.
-			// If it has been removed from the site, auto-delete it from the
-			// watchlist and add an informational log entry instead.
-			if ( null === $sitemap_urls ) {
-				$sitemap_urls = dc_gi_get_sitemap_urls_cached();
-			}
-			if ( ! empty( $sitemap_urls ) && ! in_array( $list[ $k ]['url'], $sitemap_urls, true ) ) {
-				dc_gi_log_info(
-					$list[ $k ]['url'],
-					'SITEMAP_REMOVED',
-					__( 'URL no longer in sitemap — auto-removed from watchlist', 'dc-google-indexing' )
-				);
-				unset( $list[ $k ] );
-				continue;
-			}
-			// Flag for manual QA when Google has seen the URL but not indexed it yet.
-			// Submission is handled by the Inspection Cron, not here.
-			if ( in_array( $coverage, DC_GI_QA_STATES, true ) ) {
-				dc_gi_qa_pending_add( $list[ $k ]['url'] );
-			}
+		if ( 'removed_from_watchlist' === $apply ) {
+			$removed_url = $list[ $k ]['url'];
+			unset( $list[ $k ] );
+			dc_gi_log_info(
+				$removed_url,
+				'SITEMAP_REMOVED',
+				__( 'URL no longer in sitemap — auto-removed from watchlist', 'dc-google-indexing' )
+			);
 		}
 	}
 
@@ -629,20 +646,24 @@ function dc_gi_run_inspect_batch(): string {
 	// Indexing API if its verdict indicates it needs indexing and it has not been
 	// submitted within the last 24 hours.  This replaces the former Polling loop.
 	if ( ! empty( $result['upserted'] ) && ! dc_gi_is_quota_exhausted() ) {
+		$cache_rows  = DC_GI_URL_Cache::get_entries_batch( array_keys( $result['upserted'] ) );
+		$did_enqueue = false;
 		foreach ( $result['upserted'] as $url => $coverage_state ) {
 			if ( ! in_array( $coverage_state, DC_GI_RESUBMIT_STATES, true ) ) {
 				continue;
 			}
-			$row      = DC_GI_URL_Cache::get_entry( $url );
+			$row      = $cache_rows[ $url ] ?? null;
 			$last_str = $row ? ( $row['last_submitted'] ?? '' ) : '';
 			$last_ts  = $last_str ? (int) strtotime( $last_str ) : 0;
 			if ( time() - $last_ts > DAY_IN_SECONDS ) {
 				dc_gi_enqueue_url( $url, 'URL_UPDATED' );
-				DC_GI_URL_Cache::mark_submitted( $url );
 				wp_schedule_single_event( time(), DC_GI_INSPECT_SIGNAL_HOOK, array( $url ) );
-				spawn_cron();
+				$did_enqueue = true;
 				dc_gi_log_info( $url, 'AUTO_SUBMIT', 'Auto-submitted from inspection: ' . $coverage_state );
 			}
+		}
+		if ( $did_enqueue ) {
+			spawn_cron();
 		}
 	}
 
@@ -992,69 +1013,44 @@ function dc_gi_run_watch_check_one_cron(): void {
 		return;
 	}
 
-	$key   = $keys[ $offset ];
-	$entry = &$list[ $key ];
+	$key          = $keys[ $offset ];
+	$entry        = &$list[ $key ];
+	$sitemap_urls = null;
 
 	$result = DC_GI_JWT::inspect_url( $sa, $entry['url'], $site_url );
+	$apply  = dc_gi_apply_watchlist_inspect_result( $entry, $result, $sitemap_urls );
 
-	if ( is_wp_error( $result ) ) {
-		if ( 'dc_gi_inspect_quota_exceeded' === $result->get_error_code() ) {
-			// Quota hit — don't record last_checked or advance offset.
-			return;
-		}
-		$entry['last_checked'] = time();
-		$entry['coverage']     = 'error: ' . $result->get_error_message();
-		$entry['status']       = 'error';
-	} else {
-		$entry['last_checked'] = time();
-		$coverage              = $result['inspectionResult']['indexStatusResult']['coverageState'] ?? '';
-		$entry['coverage']     = $coverage;
-
-		// Sync the URL cache with this fresh result — keeps "need submission" counts
-		// accurate without waiting for the background inspection cron to re-visit.
-		DC_GI_URL_Cache::upsert( $entry['url'], DC_GI_URL_Cache::parse_api_result( $result ) );
-
-		$new_status = dc_gi_resolve_watchlist_status( $entry['status'], $coverage );
-		if ( 'removed' === $new_status || 'indexed' === $new_status ) {
-			$entry['status'] = $new_status;
-		} elseif ( 'resubmit' === $new_status ) {
-			// Before updating status, check that the URL is still in the sitemap.
-			$sitemap_urls = dc_gi_get_sitemap_urls_cached();
-			if ( ! empty( $sitemap_urls ) && ! in_array( $entry['url'], $sitemap_urls, true ) ) {
-				$entry_url = $entry['url'];
-				unset( $entry );
-				dc_gi_log_info(
-					$entry_url,
-					'SITEMAP_REMOVED',
-					__( 'URL no longer in sitemap — auto-removed from watchlist', 'dc-google-indexing' )
-				);
-				unset( $list[ $key ] );
-				$list = array_values( $list );
-				dc_gi_update_option( 'dc_gi_watchlist', $list );
-				// Recalculate keys/total after removal and continue from same position.
-				$keys  = array_keys( $list );
-				$total = count( $keys );
-				$next  = $offset; // Stay at same position since we removed an entry.
-				while ( $next < $total && in_array( $list[ $keys[ $next ] ]['status'] ?? '', $done_statuses, true ) ) {
-					++$next;
-				}
-				if ( $next >= $total ) {
-					dc_gi_cleanup_watch_check();
-				} else {
-					dc_gi_update_option( 'dc_gi_watch_offset', $next );
-				}
-				return;
-			}
-			// Flag for manual QA when Google has seen the URL but not indexed it yet.
-			// Submission is handled by the Inspection Cron, not here.
-			if ( in_array( $coverage, DC_GI_QA_STATES, true ) ) {
-				dc_gi_qa_pending_add( $entry['url'] );
-			}
-			$entry['status'] = 'pending';
-		} else {
-			$entry['status'] = 'pending';
-		}
+	if ( 'quota_hit' === $apply ) {
+		// Quota hit — don't record last_checked or advance offset.
+		return;
 	}
+
+	if ( 'removed_from_watchlist' === $apply ) {
+		$entry_url = $entry['url'];
+		unset( $entry );
+		dc_gi_log_info(
+			$entry_url,
+			'SITEMAP_REMOVED',
+			__( 'URL no longer in sitemap — auto-removed from watchlist', 'dc-google-indexing' )
+		);
+		unset( $list[ $key ] );
+		$list = array_values( $list );
+		dc_gi_update_option( 'dc_gi_watchlist', $list );
+		// Recalculate keys/total after removal and continue from same position.
+		$keys  = array_keys( $list );
+		$total = count( $keys );
+		$next  = $offset; // Stay at same position since we removed an entry.
+		while ( $next < $total && in_array( $list[ $keys[ $next ] ]['status'] ?? '', $done_statuses, true ) ) {
+			++$next;
+		}
+		if ( $next >= $total ) {
+			dc_gi_cleanup_watch_check();
+		} else {
+			dc_gi_update_option( 'dc_gi_watch_offset', $next );
+		}
+		return;
+	}
+
 	unset( $entry );
 	dc_gi_update_option( 'dc_gi_watchlist', $list );
 

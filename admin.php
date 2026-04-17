@@ -178,7 +178,7 @@ function dc_gi_admin_css(): string {
 .dc-gi-panel input:focus,.dc-gi-panel textarea:focus{border-color:#1d8cf8!important;box-shadow:0 0 0 1px #1d8cf8!important;outline:none!important}
 /* Callouts */
 .dc-gi-callout{border-radius:6px;padding:12px 16px;margin:12px 0;font-size:13px;line-height:1.65;border-left:3px solid transparent}
-.dc-gi-callout.info{background:rgba(29,140,248,.1);border-left-color:#1d8cf8;color:#9ab8da}
+.dc-gi-callout.info{background:rgba(29,140,248,.1);border-left-color:#1d8cf8;color:#c8ddf2}
 .dc-gi-callout.warn{background:rgba(255,141,114,.1);border-left-color:#ff8d72;color:#d4a898}
 .dc-gi-callout.ok{background:rgba(0,242,195,.1);border-left-color:#00f2c3;color:#7dcfb8}
 .dc-gi-callout.err{background:rgba(253,93,147,.1);border-left-color:#fd5d93;color:#e89ab0}
@@ -1927,7 +1927,6 @@ function dc_gi_handle_qa_clear(): void {
 	delete_option( 'dc_gi_qa_results' );
 	delete_option( 'dc_gi_qa_active' );
 	delete_option( 'dc_gi_qa_offset' );
-	delete_option( 'dc_gi_qa_pending' );
 	wp_safe_redirect(
 		add_query_arg(
 			array(
@@ -2193,8 +2192,13 @@ function dc_gi_render_page(): void {
 		} elseif ( $has_sa && ! empty( $sa_decoded['client_email'] ) && ! empty( $sa_decoded['private_key'] ) ) {
 			$inspect_meta = DC_GI_JWT::get_url_notification_metadata( $sa_decoded, $inspect_url );
 			if ( is_wp_error( $inspect_meta ) ) {
-				$inspect_error = $inspect_meta->get_error_message();
-				$inspect_meta  = null;
+				$data = $inspect_meta->get_error_data();
+				if ( 404 !== ( $data['status'] ?? 0 ) ) {
+					// Only surface real errors (auth failure, permission denied, etc.).
+					// A 404 simply means the URL has no Indexing API submission history.
+					$inspect_error = $inspect_meta->get_error_message();
+				}
+				$inspect_meta = null;
 			}
 		}
 	}
