@@ -2,7 +2,7 @@
 
 > Submit URLs to Google's Web Search Indexing API for instant crawling — no waiting for Googlebot.
 
-![Version](https://img.shields.io/badge/version-1.3.9-blue)
+![Version](https://img.shields.io/badge/version-1.4.0-blue)
 ![WordPress](https://img.shields.io/badge/WordPress-6.8%2B-21759b)
 ![PHP](https://img.shields.io/badge/PHP-7.4%2B-777bb4)
 ![License](https://img.shields.io/badge/license-GPL--2.0%2B-green)

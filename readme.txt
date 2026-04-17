@@ -4,7 +4,7 @@ Tags: google, indexing, seo, search console, instant indexing
 Requires at least: 6.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.9
+Stable tag: 1.4.0
 License: GPL-2.0+
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -121,6 +121,11 @@ This plugin communicates with the following external services operated by Google
 No personal user data is sent to any of these services. Only the URLs of pages on the user's own WordPress site and the service account credentials supplied by the site administrator are transmitted.
 
 == Changelog ==
+
+= 1.4.0 =
+* New: Background URL Inspection API signal on watchlist re-submit — Re-submit button now fires a non-blocking inspection call via WP-Cron, giving Google a second crawl hint without touching the Indexing API quota.
+* Improvement: Extracted shared helpers to eliminate duplicated credential validation, option-write, log-append, and watchlist status-transition logic across all cron callbacks and AJAX handlers.
+* Improvement: Coverage-state constants (`DC_GI_RESUBMIT_STATES`, `DC_GI_QA_STATES`) replace repeated inline array literals throughout the codebase.
 
 = 1.3.9 =
 * Fix: Added third-party service disclosures to the plugin readme in compliance with WordPress.org guidelines.

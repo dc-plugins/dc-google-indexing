@@ -13,4 +13,3 @@ dist/
 # Composer
 vendor/
 composer.lock
-.github/copilot-instructions.md

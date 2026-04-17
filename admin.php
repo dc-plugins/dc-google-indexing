@@ -1517,12 +1517,9 @@ function dc_gi_ajax_watch_check_one(): void {
 	}
 
 	$settings = dc_gi_get_settings();
-	if ( empty( $settings['service_account_json'] ) ) {
-		wp_send_json_error( 'no_service_account' );
-	}
-	$sa = json_decode( $settings['service_account_json'], true );
-	if ( ! $sa || empty( $sa['client_email'] ) || empty( $sa['private_key'] ) ) {
-		wp_send_json_error( 'invalid_service_account' );
+	$sa       = dc_gi_get_validated_sa( $settings );
+	if ( is_wp_error( $sa ) ) {
+		wp_send_json_error( 'dc_gi_no_sa' === $sa->get_error_code() ? 'no_service_account' : 'invalid_service_account' );
 	}
 
 	$offset   = max( 0, (int) ( $_POST['offset'] ?? 0 ) );
@@ -1711,8 +1708,12 @@ function dc_gi_ajax_watch_status(): void {
 }
 
 /**
- * AJAX: Re-submit a single watchlist URL to the Google Indexing API.
- * Enqueues the URL for URL_UPDATED and resets its watchlist status to 'pending'.
+ * AJAX: Re-submit a single watchlist URL to the Google Indexing API and
+ * queue a URL Inspection API signal as a background cron event.
+ *
+ * The inspection signal runs via wp_schedule_single_event() + spawn_cron()
+ * so the Google API call never blocks the AJAX response.  It uses the Search
+ * Console quota (2,000/day), independent of the Indexing API quota (200/day).
  */
 function dc_gi_ajax_watch_resubmit_one(): void {
 	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
@@ -1749,10 +1750,17 @@ function dc_gi_ajax_watch_resubmit_one(): void {
 		update_option( 'dc_gi_watchlist', $list, false );
 	}
 
+	// Schedule a background URL Inspection API signal so Google re-evaluates
+	// the page via Search Console without blocking this AJAX response.
+	// spawn_cron() triggers the WP-Cron loopback immediately.
+	wp_schedule_single_event( time(), DC_GI_INSPECT_SIGNAL_HOOK, [ $url ] );
+	spawn_cron();
+
 	wp_send_json_success(
 		[
-			'url'         => $url,
-			'queue_count' => count( (array) get_option( 'dc_gi_queue', [] ) ),
+			'url'               => $url,
+			'queue_count'       => count( (array) get_option( 'dc_gi_queue', [] ) ),
+			'inspection_queued' => true,
 		]
 	);
 }
@@ -2424,13 +2432,13 @@ function dc_gi_ajax_quota_metrics(): void {
 	}
 
 	$settings = dc_gi_get_settings();
-	if ( empty( $settings['service_account_json'] ) ) {
-		wp_send_json_error( __( 'No service account configured.', 'dc-google-indexing' ) );
-	}
-
-	$sa = json_decode( wp_unslash( $settings['service_account_json'] ), true );
-	if ( ! is_array( $sa ) ) {
-		wp_send_json_error( __( 'Invalid service account JSON.', 'dc-google-indexing' ) );
+	$sa       = dc_gi_get_validated_sa( $settings );
+	if ( is_wp_error( $sa ) ) {
+		wp_send_json_error(
+			'dc_gi_no_sa' === $sa->get_error_code()
+				? __( 'No service account configured.', 'dc-google-indexing' )
+				: __( 'Invalid service account JSON.', 'dc-google-indexing' )
+		);
 	}
 
 	// Allow a forced cache-bust.
@@ -2488,12 +2496,13 @@ function dc_gi_ajax_fetch_analytics(): void {
 	}
 
 	$settings = dc_gi_get_settings();
-	if ( empty( $settings['service_account_json'] ) ) {
-		wp_send_json_error( __( 'No service account configured.', 'dc-google-indexing' ) );
-	}
-	$sa = json_decode( wp_unslash( $settings['service_account_json'] ), true );
-	if ( ! is_array( $sa ) || empty( $sa['client_email'] ) || empty( $sa['private_key'] ) ) {
-		wp_send_json_error( __( 'Invalid service account JSON.', 'dc-google-indexing' ) );
+	$sa       = dc_gi_get_validated_sa( $settings );
+	if ( is_wp_error( $sa ) ) {
+		wp_send_json_error(
+			'dc_gi_no_sa' === $sa->get_error_code()
+				? __( 'No service account configured.', 'dc-google-indexing' )
+				: __( 'Invalid service account JSON.', 'dc-google-indexing' )
+		);
 	}
 
 	$allowed_days = [ 7, 28, 90 ];
@@ -3659,7 +3668,7 @@ function dc_gi_render_page(): void {
 								class="button dc-gi-watch-resubmit-btn"
 								style="font-size:11px;padding:2px 8px"
 								data-url="<?php echo esc_attr( $entry['url'] ); ?>"
-								title="<?php esc_attr_e( 'Re-submit to Google Indexing API', 'dc-google-indexing' ); ?>"
+								title="<?php esc_attr_e( 'Re-submit to Indexing API + signal URL Inspection API', 'dc-google-indexing' ); ?>"
 							>↻</button>
 							<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
 								<?php wp_nonce_field( 'dc_gi_watch_del' ); ?>
