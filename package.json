@@ -1,0 +1,26 @@
+{
+  "name": "dc-google-indexing",
+  "version": "1.0.0",
+  "description": "> Submit URLs to Google's Web Search Indexing API for instant crawling — no waiting for Googlebot.",
+  "main": "index.js",
+  "scripts": {
+    "lint": "eslint assets/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dc-plugins/dc-google-indexing.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/dc-plugins/dc-google-indexing/issues"
+  },
+  "homepage": "https://github.com/dc-plugins/dc-google-indexing#readme",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.2.1",
+    "globals": "^17.5.0"
+  }
+}

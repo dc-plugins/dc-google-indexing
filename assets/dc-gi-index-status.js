@@ -192,7 +192,7 @@
 				var row    = rows[ i ];
 				var badge  = verdictBadge[ row.index_verdict ] || '<span style="color:#7a8499">' + esc( row.index_verdict ) + '</span>';
 				var url    = row.url || '';
-				var urlDisp = url.replace( /^https?:\/\/[^\/]+/, '' ) || url;
+				var urlDisp = url.replace( /^https?:\/\/[^/]+/, '' ) || url;
 				html += '<tr class="dc-gi-is-data-row" data-idx="' + (offset+i) + '" style="cursor:pointer">';
 				html += '<td style="color:#7a8499;font-size:12px">' + ( offset + i + 1 ) + '</td>';
 				html += '<td style="overflow:hidden"><a href="' + esc( url ) + '" target="_blank" rel="noopener noreferrer" style="color:#6ab0f5;font-size:12px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc( url ) + '">' + esc( urlDisp ) + '</a></td>';
