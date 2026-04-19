@@ -411,6 +411,16 @@ function dc_gi_watchlist_add( string $url, string $status = 'pending' ): void {
 				// Refresh the submission timestamp on every re-submission so the
 				// watchlist-check throttle (HOUR_IN_SECONDS) gets a fresh baseline.
 				$entry['submitted_at'] = time();
+				// If the entry was previously marked 'indexed' but is being re-submitted
+				// (e.g. the background inspection cron re-inspected it after the cache TTL
+				// expired and found it NEUTRAL), reset to 'pending' so the watchlist check
+				// will re-verify the indexing state.  Without this, 'indexed' entries are
+				// permanently skipped by the check loop and the watchlist diverges from
+				// the Index Status cache ("Need Submission" count grows while watchlist
+				// still shows old "Indexed" entries).
+				if ( 'indexed' === $entry['status'] ) {
+					$entry['status'] = 'pending';
+				}
 				unset( $entry );
 				dc_gi_update_option( 'dc_gi_watchlist', $list );
 			}

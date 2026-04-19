@@ -2,6 +2,11 @@
 
 All notable changes to DC Google Indexing are documented here.
 
+## [Unreleased]
+
+### Fixed
+- **Watchlist / Index Status mismatch** — `dc_gi_watchlist_add()` now resets a previously-`'indexed'` entry back to `'pending'` when it is re-submitted (e.g. after the 7-day inspection cache TTL expires and the background cron finds the URL NEUTRAL again). Previously, `'indexed'` entries were never downgraded, so the watchlist check permanently skipped them while the Index Status cache continued to show them under "Need Submission", causing the two counters to diverge.
+
 ## [1.4.0] – 2026-04-17
 
 ### Added
