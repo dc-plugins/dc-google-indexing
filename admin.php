@@ -79,6 +79,9 @@ add_action( 'wp_ajax_dc_gi_index_status', 'dc_gi_ajax_index_status' );
 add_action( 'wp_ajax_dc_gi_is_urls', 'dc_gi_ajax_is_urls' );
 add_action( 'wp_ajax_dc_gi_quota_metrics', 'dc_gi_ajax_quota_metrics' );
 add_action( 'wp_ajax_dc_gi_fetch_analytics', 'dc_gi_ajax_fetch_analytics' );
+add_action( 'wp_ajax_dc_gi_is_inspect_now', 'dc_gi_ajax_is_inspect_now' );
+add_action( 'wp_ajax_dc_gi_is_bulk_resubmit', 'dc_gi_ajax_is_bulk_resubmit' );
+add_action( 'admin_post_dc_gi_is_export_csv', 'dc_gi_handle_is_export_csv' );
 add_action( 'admin_enqueue_scripts', 'dc_gi_enqueue_scripts' );
 /**
  * Enqueue admin scripts and localized data for the plugin's admin page.
@@ -91,6 +94,11 @@ function dc_gi_enqueue_scripts( string $hook ): void {
 	}
 	$base     = plugin_dir_url( DC_GI_FILE );
 	$settings = dc_gi_get_settings();
+
+	$_analytics_last    = class_exists( 'DC_GI_URL_Cache' ) ? DC_GI_URL_Cache::get_analytics_last_updated() : null;
+	$_analytics_age_hrs = $_analytics_last
+		? (int) round( ( time() - (int) strtotime( $_analytics_last ) ) / HOUR_IN_SECONDS )
+		: 9999;
 
 	wp_enqueue_style( 'dc-gi-admin', $base . 'assets/dc-gi-admin.css', array(), DC_GI_VERSION );
 
@@ -109,6 +117,7 @@ function dc_gi_enqueue_scripts( string $hook ): void {
 				admin_url( 'admin.php' )
 			),
 			'analyticsDefaultDays' => max( 1, (int) ( $settings['analytics_days'] ?? 28 ) ),
+			'analyticsAge'         => $_analytics_age_hrs,
 			'watchActive'          => (bool) get_option( 'dc_gi_watch_active', false ),
 			'watchOffset'          => (int) get_option( 'dc_gi_watch_offset', 0 ),
 			'watchTotal'           => count( (array) get_option( 'dc_gi_watchlist', array() ) ),
@@ -183,6 +192,14 @@ function dc_gi_enqueue_scripts( string $hook ): void {
 				'isWarning'                  => __( 'Warning:', 'dc-google-indexing' ),
 				'isNoDataReturned'           => __( 'No data returned.', 'dc-google-indexing' ),
 				'isRequestFailed'            => __( 'Request failed.', 'dc-google-indexing' ),
+				'isExpandAll'                => __( 'Expand All', 'dc-google-indexing' ),
+				'isCollapseAll'              => __( 'Collapse All', 'dc-google-indexing' ),
+				'isInspectNow'               => __( '↻ Inspect Now', 'dc-google-indexing' ),
+				'isInspecting'               => __( '…', 'dc-google-indexing' ),
+				'isInspectError'             => __( 'Could not inspect this URL.', 'dc-google-indexing' ),
+				'isBulkConfirm'              => __( 'Re-submit all NEUTRAL and FAIL URLs? This consumes your daily Indexing API quota.', 'dc-google-indexing' ),
+				'isBulkWorking'              => __( 'Working…', 'dc-google-indexing' ),
+				'isBulkError'                => __( 'Bulk re-submission failed.', 'dc-google-indexing' ),
 			),
 		)
 	);
@@ -1206,10 +1223,12 @@ function dc_gi_ajax_is_urls(): void {
 		wp_send_json_error( 'Forbidden', 403 );
 	}
 
-	$page     = max( 1, (int) ( $_POST['page'] ?? 1 ) );    // phpcs:ignore WordPress.Security.NonceVerification.Missing
-	$filter   = sanitize_text_field( wp_unslash( $_POST['filter'] ?? '' ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
-	$order_by = sanitize_text_field( wp_unslash( $_POST['order_by'] ?? 'last_inspected' ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
-	$order    = 'ASC' === strtoupper( sanitize_text_field( wp_unslash( $_POST['order'] ?? 'DESC' ) ) ) ? 'ASC' : 'DESC'; // phpcs:ignore WordPress.Security.NonceVerification.Missing
+	$page            = max( 1, (int) ( $_POST['page'] ?? 1 ) );    // phpcs:ignore WordPress.Security.NonceVerification.Missing
+	$filter          = sanitize_text_field( wp_unslash( $_POST['filter'] ?? '' ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+	$order_by        = sanitize_text_field( wp_unslash( $_POST['order_by'] ?? 'last_inspected' ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+	$order           = 'ASC' === strtoupper( sanitize_text_field( wp_unslash( $_POST['order'] ?? 'DESC' ) ) ) ? 'ASC' : 'DESC'; // phpcs:ignore WordPress.Security.NonceVerification.Missing
+	$search          = sanitize_text_field( wp_unslash( $_POST['search'] ?? '' ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+	$coverage_filter = sanitize_text_field( wp_unslash( $_POST['coverage_filter'] ?? '' ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
 
 	$allowed = array( '', 'PASS', 'NEUTRAL', 'FAIL', 'VERDICT_UNSPECIFIED', 'EXCLUDED' );
 	if ( ! in_array( $filter, $allowed, true ) ) {
@@ -1217,8 +1236,8 @@ function dc_gi_ajax_is_urls(): void {
 	}
 
 	$per_page    = 25;
-	$rows        = DC_GI_URL_Cache::get_paginated_urls( $page, $per_page, $filter, $order_by, $order );
-	$total       = DC_GI_URL_Cache::count_filtered( $filter );
+	$rows        = DC_GI_URL_Cache::get_paginated_urls( $page, $per_page, $filter, $order_by, $order, $search, $coverage_filter );
+	$total       = DC_GI_URL_Cache::count_filtered( $filter, $search, $coverage_filter );
 	$total_pages = (int) ceil( max( 1, $total ) / $per_page );
 
 	wp_send_json_success(
@@ -1232,6 +1251,153 @@ function dc_gi_ajax_is_urls(): void {
 			'order'       => $order,
 		)
 	);
+}
+
+/**
+ * AJAX: Immediately inspect a single URL via the Search Console URL Inspection API
+ * and update its cache entry. Rate-limited to one call per URL per 5 minutes.
+ */
+function dc_gi_ajax_is_inspect_now(): void {
+	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_send_json_error( 'Forbidden', 403 );
+	}
+
+	$url = esc_url_raw( isset( $_POST['url'] ) ? wp_unslash( $_POST['url'] ) : '' ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+	if ( ! $url ) {
+		wp_send_json_error( __( 'Missing URL.', 'dc-google-indexing' ) );
+	}
+
+	$lock = 'dc_gi_inspect_now_' . md5( $url );
+	if ( get_transient( $lock ) ) {
+		wp_send_json_error( __( 'This URL was inspected recently. Please wait 5 minutes.', 'dc-google-indexing' ) );
+	}
+
+	$settings = dc_gi_get_settings();
+	$sa       = dc_gi_get_validated_sa( $settings );
+	if ( is_wp_error( $sa ) ) {
+		wp_send_json_error( $sa->get_error_message() );
+	}
+
+	$site_url = dc_gi_get_search_console_property( $settings );
+	if ( ! $site_url ) {
+		wp_send_json_error( __( 'No Search Console property configured.', 'dc-google-indexing' ) );
+	}
+
+	$result = DC_GI_JWT::inspect_url( $sa, $url, $site_url );
+	if ( is_wp_error( $result ) ) {
+		wp_send_json_error( $result->get_error_message() );
+	}
+
+	$fields = DC_GI_URL_Cache::parse_api_result( $result );
+	DC_GI_URL_Cache::upsert( $url, $fields );
+	set_transient( $lock, 1, 5 * MINUTE_IN_SECONDS );
+
+	wp_send_json_success( array( 'row' => DC_GI_URL_Cache::get_entry( $url ) ) );
+}
+
+/**
+ * AJAX: Re-submit all NEUTRAL and FAIL URLs to the Google Indexing API,
+ * capped to the remaining daily quota.
+ */
+function dc_gi_ajax_is_bulk_resubmit(): void {
+	check_ajax_referer( 'dc_gi_ajax', 'nonce' );
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_send_json_error( 'Forbidden', 403 );
+	}
+
+	global $wpdb;
+	$table = DC_GI_URL_Cache::table();
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+	$urls = (array) $wpdb->get_col( "SELECT url FROM {$table} WHERE index_verdict IN ('NEUTRAL','FAIL')" );
+
+	if ( empty( $urls ) ) {
+		wp_send_json_success(
+			array(
+				'queued_count'  => 0,
+				'skipped_count' => 0,
+				'queue_total'   => count( (array) get_option( 'dc_gi_queue', array() ) ),
+				'message'       => __( 'No URLs currently need re-submission.', 'dc-google-indexing' ),
+			)
+		);
+	}
+
+	$settings  = dc_gi_get_settings();
+	$limit     = min( DC_GI_DAILY_CAP, (int) ( $settings['daily_quota'] ?? DC_GI_DAILY_CAP ) );
+	$remaining = max( 0, $limit - dc_gi_get_quota_used() );
+	$to_submit = array_slice( $urls, 0, $remaining );
+	$skipped   = count( $urls ) - count( $to_submit );
+
+	foreach ( $to_submit as $url ) {
+		dc_gi_enqueue_url( (string) $url, 'URL_UPDATED' );
+	}
+
+	wp_send_json_success(
+		array(
+			'queued_count'  => count( $to_submit ),
+			'skipped_count' => $skipped,
+			'queue_total'   => count( (array) get_option( 'dc_gi_queue', array() ) ),
+			'message'       => sprintf(
+				/* translators: 1: number queued, 2: number skipped */
+				__( '%1$d URL(s) queued. %2$d skipped (quota full).', 'dc-google-indexing' ),
+				count( $to_submit ),
+				$skipped
+			),
+		)
+	);
+}
+
+/**
+ * Admin-post handler: stream the Index Status URL table as a CSV download.
+ */
+function dc_gi_handle_is_export_csv(): void {
+	check_admin_referer( 'dc_gi_is_export' );
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_die( esc_html__( 'Forbidden', 'dc-google-indexing' ) );
+	}
+
+	// phpcs:disable WordPress.Security.NonceVerification.Recommended
+	$filter          = sanitize_text_field( wp_unslash( $_GET['filter'] ?? '' ) );
+	$search          = sanitize_text_field( wp_unslash( $_GET['search'] ?? '' ) );
+	$coverage_filter = sanitize_text_field( wp_unslash( $_GET['coverage_filter'] ?? '' ) );
+	$order_by        = sanitize_text_field( wp_unslash( $_GET['order_by'] ?? 'last_crawl_time' ) );
+	$order           = 'ASC' === strtoupper( sanitize_text_field( wp_unslash( $_GET['order'] ?? '' ) ) ) ? 'ASC' : 'DESC';
+	// phpcs:enable WordPress.Security.NonceVerification.Recommended
+
+	$allowed = array( '', 'PASS', 'NEUTRAL', 'FAIL', 'VERDICT_UNSPECIFIED', 'EXCLUDED' );
+	if ( ! in_array( $filter, $allowed, true ) ) {
+		$filter = '';
+	}
+
+	$rows     = DC_GI_URL_Cache::get_paginated_urls( 1, 9999, $filter, $order_by, $order, $search, $coverage_filter );
+	$filename = 'index-status-' . gmdate( 'Y-m-d' ) . '.csv';
+
+	header( 'Content-Type: text/csv; charset=utf-8' );
+	header( 'Content-Disposition: attachment; filename="' . rawurlencode( $filename ) . '"' );
+	header( 'Pragma: no-cache' );
+
+	$out = fopen( 'php://output', 'w' );
+	fwrite( $out, "\xEF\xBB\xBF" ); // BOM for Excel UTF-8 compatibility.
+	fputcsv( $out, array( 'URL', 'Verdict', 'Coverage State', 'Last Crawl', 'Last Inspected', 'Last Submitted', 'Clicks', 'Impressions', 'CTR %', 'Avg Position' ) );
+	foreach ( $rows as $row ) {
+		fputcsv(
+			$out,
+			array(
+				$row['url'],
+				$row['index_verdict'],
+				$row['coverage_state'],
+				$row['last_crawl_time'] ?? '',
+				$row['last_inspected'] ?? '',
+				$row['last_submitted'] ?? '',
+				(int) $row['sa_clicks'],
+				(int) $row['sa_impressions'],
+				number_format( (float) $row['sa_ctr'] * 100, 2 ),
+				number_format( (float) $row['sa_position'], 1 ),
+			)
+		);
+	}
+	fclose( $out );
+	exit;
 }
 
 /**
@@ -3036,7 +3202,10 @@ function dc_gi_render_page(): void {
 					$is_pct   = $is_total > 0 ? (int) round( $is_cnt / $is_total * 100 ) : 0;
 					$is_col   = $is_ccolors[ $is_state ] ?? '#7a8499';
 					?>
-				<div style="margin-bottom:12px">
+				<div class="dc-gi-coverage-bar" data-coverage-filter="<?php echo esc_attr( $is_state ); ?>"
+					style="margin-bottom:12px;cursor:pointer"
+					title="<?php echo esc_attr( sprintf( /* translators: %s: coverage state label */ __( 'Filter by: %s', 'dc-google-indexing' ), $is_state ) ); ?>"
+				>
 					<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
 						<span style="font-size:12px;color:#c8d0e0;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="<?php echo esc_attr( $is_state ); ?>"><?php echo esc_html( $is_state ); ?></span>
 						<span style="font-size:12px;color:#7a8499;white-space:nowrap;margin-left:8px"><?php echo esc_html( (string) $is_cnt . ' (' . (string) $is_pct . '%)' ); ?></span>
@@ -3124,7 +3293,21 @@ function dc_gi_render_page(): void {
 
 		</div><!-- /two-column grid -->
 
+		<!-- Bulk re-submit control -->
+		<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+			<button id="dc-gi-is-bulk-resubmit" class="button dc-gi-btn-start" style="padding:5px 16px!important">
+				<?php esc_html_e( '↻ Re-submit All (NEUTRAL/FAIL)', 'dc-google-indexing' ); ?>
+			</button>
+			<span id="dc-gi-is-bulk-status" style="font-size:12px;color:#7a8499"></span>
+		</div>
+
 		<!-- URL table — filter tabs -->
+		<!-- URL search -->
+		<div style="margin-bottom:10px">
+			<input type="search" id="dc-gi-is-search"
+				placeholder="<?php esc_attr_e( 'Filter by URL…', 'dc-google-indexing' ); ?>"
+				style="width:320px;max-width:100%;background:#1a2035;border:1px solid #2d3555;color:#c8d0e0;border-radius:4px;padding:6px 10px;font-size:13px">
+		</div>
 		<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;align-items:center">
 			<span style="font-size:13px;font-weight:600;color:#c8d0e0;margin-right:6px"><?php esc_html_e( 'URL Status Table:', 'dc-google-indexing' ); ?></span>
 				<?php
@@ -3158,6 +3341,15 @@ function dc_gi_render_page(): void {
 					<?php echo esc_html( $is_ftab['label'] ); ?> <span class="dc-gi-is-fcount"><?php echo esc_html( (string) $is_ftab['n'] ); ?></span>
 			</button>
 				<?php endforeach; ?>
+			<button id="dc-gi-is-expand-all" class="button" style="font-size:12px;padding:4px 12px;margin-left:auto">
+				<?php esc_html_e( 'Expand All', 'dc-google-indexing' ); ?>
+			</button>
+			<a id="dc-gi-is-export-csv"
+				data-base-href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=dc_gi_is_export_csv' ), 'dc_gi_is_export' ) ); ?>"
+				href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=dc_gi_is_export_csv' ), 'dc_gi_is_export' ) ); ?>"
+				class="button" style="font-size:12px;padding:4px 12px;text-decoration:none">
+				<?php esc_html_e( '⬇ Export CSV', 'dc-google-indexing' ); ?>
+			</a>
 		</div>
 
 		<!-- URL table -->
@@ -3181,11 +3373,12 @@ function dc_gi_render_page(): void {
 						<th style="width:120px;color:#c8d0e0;cursor:pointer" data-col="last_inspected">
 							<?php esc_html_e( 'Inspected', 'dc-google-indexing' ); ?> <span class="dc-gi-sort-icon" data-col="last_inspected"></span>
 						</th>
+						<th style="width:40px;color:#7a8499"></th>
 						<th style="width:32px;color:#7a8499"></th>
 					</tr>
 				</thead>
 				<tbody id="dc-gi-is-url-tbody">
-					<tr><td colspan="7" style="text-align:center;color:#7a8499;padding:24px"><?php esc_html_e( 'Loading…', 'dc-google-indexing' ); ?></td></tr>
+					<tr><td colspan="8" style="text-align:center;color:#7a8499;padding:24px"><?php esc_html_e( 'Loading…', 'dc-google-indexing' ); ?></td></tr>
 				</tbody>
 			</table>
 		</div>

@@ -765,11 +765,13 @@ class DC_GI_URL_Cache {
 	/**
 	 * Return a page of cache rows for display in the Index Status tab.
 	 *
-	 * @param int    $page           1-based page number.
-	 * @param int    $per_page       Rows per page.
-	 * @param string $verdict_filter '' = all; 'PASS'|'NEUTRAL'|'FAIL'|'VERDICT_UNSPECIFIED'|'EXCLUDED' (NEUTRAL+UNSPECIFIED).
-	 * @param string $order_by       Column to sort by.
-	 * @param string $order          ASC or DESC.
+	 * @param int    $page            1-based page number.
+	 * @param int    $per_page        Rows per page.
+	 * @param string $verdict_filter  '' = all; 'PASS'|'NEUTRAL'|'FAIL'|'VERDICT_UNSPECIFIED'|'EXCLUDED' (NEUTRAL+UNSPECIFIED).
+	 * @param string $order_by        Column to sort by.
+	 * @param string $order           ASC or DESC.
+	 * @param string $search          Optional URL substring filter.
+	 * @param string $coverage_filter Optional exact coverage_state filter.
 	 * @return array<int,array{
 	 *   url:string,index_verdict:string,coverage_state:string,page_fetch_state:string,
 	 *   robots_txt_state:string,indexing_state:string,last_crawl_time:string|null,
@@ -777,7 +779,7 @@ class DC_GI_URL_Cache {
 	 *   last_inspected:string,last_submitted:string|null
 	 * }>
 	 */
-	public static function get_paginated_urls( int $page, int $per_page, string $verdict_filter = '', string $order_by = 'last_inspected', string $order = 'DESC' ): array {
+	public static function get_paginated_urls( int $page, int $per_page, string $verdict_filter = '', string $order_by = 'last_inspected', string $order = 'DESC', string $search = '', string $coverage_filter = '' ): array {
 		global $wpdb;
 
 		$allowed_cols = array( 'url', 'index_verdict', 'coverage_state', 'last_crawl_time', 'last_inspected', 'last_submitted' );
@@ -793,16 +795,30 @@ class DC_GI_URL_Cache {
 		         google_canonical, user_canonical, crawled_as, rich_results,
 		         last_inspected, last_submitted,
 		         sa_clicks, sa_impressions, sa_ctr, sa_position, sa_updated';
+
+		$where_parts = array();
+		$args        = array();
+
 		if ( 'EXCLUDED' === $verdict_filter ) {
-			$sql  = "SELECT {$cols} FROM {$table} WHERE index_verdict IN ('NEUTRAL','VERDICT_UNSPECIFIED') ORDER BY {$order_by} {$order} LIMIT %d OFFSET %d"; // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-			$args = array( $per_page, $offset );
-		} elseif ( ! empty( $verdict_filter ) ) {
-			$sql  = "SELECT {$cols} FROM {$table} WHERE index_verdict = %s ORDER BY {$order_by} {$order} LIMIT %d OFFSET %d"; // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-			$args = array( $verdict_filter, $per_page, $offset );
-		} else {
-			$sql  = "SELECT {$cols} FROM {$table} ORDER BY {$order_by} {$order} LIMIT %d OFFSET %d"; // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-			$args = array( $per_page, $offset );
+			$where_parts[] = "index_verdict IN ('NEUTRAL','VERDICT_UNSPECIFIED')";
+		} elseif ( '' !== $verdict_filter ) {
+			$where_parts[] = 'index_verdict = %s';
+			$args[]        = $verdict_filter;
 		}
+		if ( '' !== $coverage_filter ) {
+			$where_parts[] = 'coverage_state = %s';
+			$args[]        = $coverage_filter;
+		}
+		if ( '' !== $search ) {
+			$where_parts[] = 'url LIKE %s';
+			$args[]        = '%' . $wpdb->esc_like( $search ) . '%';
+		}
+
+		$where  = $where_parts ? 'WHERE ' . implode( ' AND ', $where_parts ) : '';
+		$sql    = "SELECT {$cols} FROM {$table} {$where} ORDER BY {$order_by} {$order} LIMIT %d OFFSET %d"; // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$args[] = $per_page;
+		$args[] = $offset;
+
 		$rows = $wpdb->get_results( $wpdb->prepare( $sql, $args ), ARRAY_A ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared
 
 		return $rows ? (array) $rows : array();
@@ -811,24 +827,45 @@ class DC_GI_URL_Cache {
 	/**
 	 * Count rows matching a verdict filter (used for pagination totals).
 	 *
-	 * @param string $verdict_filter '' = all; 'PASS'|'NEUTRAL'|'FAIL'|'VERDICT_UNSPECIFIED'|'EXCLUDED'.
+	 * @param string $verdict_filter  '' = all; 'PASS'|'NEUTRAL'|'FAIL'|'VERDICT_UNSPECIFIED'|'EXCLUDED'.
+	 * @param string $search          Optional URL substring filter.
+	 * @param string $coverage_filter Optional exact coverage_state filter.
 	 * @return int
 	 */
-	public static function count_filtered( string $verdict_filter = '' ): int {
+	public static function count_filtered( string $verdict_filter = '', string $search = '', string $coverage_filter = '' ): int {
 		global $wpdb;
 		$table = self::table();
 
+		$where_parts = array();
+		$args        = array();
+
 		if ( 'EXCLUDED' === $verdict_filter ) {
-			$sql = "SELECT COUNT(*) FROM {$table} WHERE index_verdict IN ('NEUTRAL','VERDICT_UNSPECIFIED')"; // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-			return (int) $wpdb->get_var( $sql ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared
+			$where_parts[] = "index_verdict IN ('NEUTRAL','VERDICT_UNSPECIFIED')";
+		} elseif ( '' !== $verdict_filter ) {
+			$where_parts[] = 'index_verdict = %s';
+			$args[]        = $verdict_filter;
+		}
+		if ( '' !== $coverage_filter ) {
+			$where_parts[] = 'coverage_state = %s';
+			$args[]        = $coverage_filter;
+		}
+		if ( '' !== $search ) {
+			$where_parts[] = 'url LIKE %s';
+			$args[]        = '%' . $wpdb->esc_like( $search ) . '%';
 		}
 
-		if ( ! empty( $verdict_filter ) ) {
-			$csql = "SELECT COUNT(*) FROM {$table} WHERE index_verdict = %s"; // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-			return (int) $wpdb->get_var( $wpdb->prepare( $csql, $verdict_filter ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared
+		if ( ! $where_parts ) {
+			return self::count_total();
 		}
 
-		return self::count_total();
+		$where = 'WHERE ' . implode( ' AND ', $where_parts );
+		$sql   = "SELECT COUNT(*) FROM {$table} {$where}"; // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+		if ( $args ) {
+			return (int) $wpdb->get_var( $wpdb->prepare( $sql, $args ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared
+		}
+
+		return (int) $wpdb->get_var( $sql ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared
 	}
 
 	/**
