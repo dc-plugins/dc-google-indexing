@@ -3082,7 +3082,7 @@ function dc_gi_render_page(): void {
 		<?php endif; ?>
 
 		<h2 style="margin-top:0"><?php esc_html_e( 'Index Status Overview', 'dc-google-indexing' ); ?></h2>
-		<p style="color:#8892a4;max-width:720px;font-size:13px;margin-bottom:20px"><?php esc_html_e( 'Live snapshot of all URLs in the inspection cache, grouped by coverage state and index verdict. The stat cards auto-refresh every 30 seconds.', 'dc-google-indexing' ); ?></p>
+		<p style="color:#8892a4;max-width:720px;font-size:13px;margin-bottom:20px"><?php esc_html_e( 'Live snapshot of all URLs in the inspection cache, grouped by coverage state and index verdict.', 'dc-google-indexing' ); ?></p>
 
 		<div class="dc-gi-callout warn" id="dc-gi-is-quota-backoff" style="max-width:700px;margin-bottom:18px<?php echo get_transient( 'dc_gi_inspect_quota_backoff' ) ? '' : ';display:none'; ?>">
 			<?php esc_html_e( 'URL Inspection API quota temporarily exhausted — background inspection is paused for up to 1 hour. The cache will resume building automatically once the quota window resets. Data shown below reflects what was cached before the quota was hit.', 'dc-google-indexing' ); ?>
@@ -3399,15 +3399,6 @@ function dc_gi_render_page(): void {
 				<?php esc_html_e( 'The inspection cache has no data yet. The background cron inspects URLs from the sitemap at a rate of 3 URLs per minute. Check back in a few minutes.', 'dc-google-indexing' ); ?>
 		</div>
 		<?php endif; ?>
-
-		<!-- Auto-refresh summary stats every 30 s -->
-		<div style="display:flex;align-items:center;gap:12px;margin-top:12px;flex-wrap:wrap">
-			<span id="dc-gi-is-ts" style="font-size:12px;color:#7a8499"></span>
-			<label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#7a8499;cursor:pointer">
-				<input type="checkbox" id="dc-gi-is-auto" checked style="cursor:pointer">
-				<?php esc_html_e( 'Auto-refresh every 30 s', 'dc-google-indexing' ); ?>
-			</label>
-		</div>
 
 
 

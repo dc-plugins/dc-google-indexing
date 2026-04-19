@@ -12,7 +12,6 @@
 	var ajaxUrl        = dcGiPoll.ajaxurl;
 	var inspectBaseUrl = dcGiPoll.inspectBaseUrl;
 	var i18n           = dcGiPoll.i18n;
-	var timer          = null;
 	var isPage         = 1;
 	var isFilter       = '';
 	var isTotalPages   = 1;
@@ -44,11 +43,6 @@
 	function fmtState( s ) {
 		if ( ! s ) { return '\u2014'; }
 		return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase().replace( /_/g, ' ' );
-	}
-
-	function setNum( id, val ) {
-		var el = document.querySelector( '#' + id + ' .dc-gi-stat-num' );
-		if ( el ) { el.textContent = val; }
 	}
 
 	// ── Sort icon update ─────────────────────────────────────────────────────
@@ -375,40 +369,7 @@
 		if ( ts ) { ts.textContent = i18n.isUpdated + ' ' + new Date().toLocaleTimeString(); }
 	}
 
-	// ── Refresh summary stat cards ───────────────────────────────────────────
-
-	function doRefresh() {
-		jQuery.post( ajaxUrl, { action: 'dc_gi_index_status', nonce: nonce }, function ( resp ) {
-			if ( ! resp || ! resp.success ) { return; }
-			var d = resp.data, v = d.verdicts || {};
-			var inspErr = d.inspect_errors || 0;
-			setNum( 'is-stat-total',    d.total );
-			setNum( 'is-stat-pass',     v['PASS'] || 0 );
-			setNum( 'is-stat-excluded', d.excluded || 0 );
-			setNum( 'is-stat-fail',     v['FAIL'] || 0 );
-			setNum( 'is-stat-errors',   inspErr );
-			setNum( 'is-stat-age',      null != d.age_days ? d.age_days : '\u2014' );
-			var ts = document.getElementById( 'dc-gi-is-ts' );
-			if ( ts ) { ts.textContent = i18n.isStatsUpdated + ' ' + new Date().toLocaleTimeString(); }
-			// Show/hide the inspection quota backoff notice.
-			var qbEl = document.getElementById( 'dc-gi-is-quota-backoff' );
-			if ( qbEl ) { qbEl.style.display = d.quota_backoff ? '' : 'none'; }
-			// Also reload the URL table to stay current.
-			loadUrlTable( isPage, isFilter, null, null );
-		} );
-	}
-
-	function scheduleAuto() {
-		clearInterval( timer );
-		if ( document.getElementById( 'dc-gi-is-auto' ).checked ) {
-			timer = setInterval( doRefresh, 30000 );
-		}
-	}
-
 	// ── Wire up events ───────────────────────────────────────────────────────
-
-	document.getElementById( 'dc-gi-is-auto' ).addEventListener( 'change', scheduleAuto );
-	scheduleAuto();
 
 	document.getElementById( 'dc-gi-is-prev' ).addEventListener( 'click', function () {
 		if ( isPage > 1 ) { loadUrlTable( isPage - 1, isFilter, null, null ); }
