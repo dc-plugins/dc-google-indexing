@@ -197,6 +197,76 @@
 		return html;
 	}
 
+	// ── Shared re-submit button wiring ───────────────────────────────────────
+	// Called both by renderUrlTable (for all buttons after a full table render)
+	// and by the inspect-now handler (for the single button in a replaced detail row).
+
+	function wireResubmitBtn( btn, tbody ) {
+		btn.addEventListener( 'click', function( e ) {
+			e.preventDefault();
+			e.stopPropagation();
+			var url = btn.getAttribute( 'data-url' ) || '';
+			if ( ! url ) { return; }
+			btn.disabled    = true;
+			btn.textContent = i18n.isQueueing;
+			jQuery.post( ajaxUrl, {
+				action: 'dc_gi_watch_resubmit_one',
+				nonce:  nonce,
+				url:    url
+			}, function( resp ) {
+				if ( ! resp || ! resp.success ) {
+					window.alert( i18n.isResubmitError );
+					btn.disabled    = false;
+					btn.textContent = i18n.isResubmit;
+					return;
+				}
+				btn.textContent = i18n.isQueued;
+
+				// Update queue badge.
+				var queueCount = resp.data && resp.data.queue_count ? resp.data.queue_count : null;
+				if ( null !== queueCount ) {
+					var headerQueue = document.getElementById( 'dc-gi-header-queue' );
+					if ( headerQueue ) { headerQueue.textContent = queueCount; }
+					var bodyQueue = document.getElementById( 'dc-gi-queue-body-count' );
+					if ( bodyQueue ) { bodyQueue.textContent = queueCount; }
+				}
+
+				// Find the parent data row via the shared data-idx on the detail row.
+				var detailRow = btn.closest( '.dc-gi-is-detail-row' );
+				var idx       = detailRow ? detailRow.getAttribute( 'data-idx' ) : null;
+				var dataRow   = idx ? tbody.querySelector( '.dc-gi-is-data-row[data-idx="' + idx + '"]' ) : null;
+
+				// Update verdict badge → "Submitted" in the data row.
+				if ( dataRow ) {
+					var verdictCell = dataRow.querySelector( 'td:nth-child(3)' );
+					if ( verdictCell ) {
+						verdictCell.innerHTML = '<span style="color:#1d8cf8;font-weight:600">\u21BB Submitted</span>';
+					}
+					// Flash the row (same technique as Watchlist).
+					dataRow.classList.remove( 'dc-gi-wl-flash' );
+					dataRow.offsetHeight; // eslint-disable-line no-unused-expressions
+					dataRow.classList.add( 'dc-gi-wl-flash' );
+				}
+
+				// Update Last Submitted in the detail panel.
+				var now    = new Date();
+				var nowStr = now.getFullYear() + '-'
+					+ String( now.getMonth() + 1 ).padStart( 2, '0' ) + '-'
+					+ String( now.getDate() ).padStart( 2, '0' ) + ' '
+					+ String( now.getHours() ).padStart( 2, '0' ) + ':'
+					+ String( now.getMinutes() ).padStart( 2, '0' );
+				if ( detailRow ) {
+					var submittedEl = detailRow.querySelector( '[data-is-submitted]' );
+					if ( submittedEl ) { submittedEl.textContent = fmtDate( nowStr ); }
+				}
+			} ).fail( function() {
+				window.alert( i18n.isResubmitError );
+				btn.disabled    = false;
+				btn.textContent = i18n.isResubmit;
+			} );
+		} );
+	}
+
 	function renderUrlTable( rows, page, total ) {
 		var tbody = document.getElementById( 'dc-gi-is-url-tbody' );
 		if ( ! tbody ) { return; }
@@ -242,70 +312,8 @@
 				} );
 			} );
 
-			tbody.querySelectorAll( '.dc-gi-is-resubmit-btn' ).forEach( function(btn) {
-				btn.addEventListener( 'click', function(e) {
-					e.preventDefault();
-					e.stopPropagation();
-					var url = btn.getAttribute( 'data-url' ) || '';
-					if ( ! url ) { return; }
-					btn.disabled = true;
-					btn.textContent = i18n.isQueueing;
-					jQuery.post( ajaxUrl, {
-						action: 'dc_gi_watch_resubmit_one',
-						nonce: nonce,
-						url: url
-					}, function(resp) {
-						if ( ! resp || ! resp.success ) {
-							window.alert( i18n.isResubmitError );
-							btn.disabled = false;
-							btn.textContent = i18n.isResubmit;
-							return;
-						}
-						btn.textContent = i18n.isQueued;
-
-						// Update queue badge.
-						var queueCount = resp.data && resp.data.queue_count ? resp.data.queue_count : null;
-						if ( null !== queueCount ) {
-							var headerQueue = document.getElementById( 'dc-gi-header-queue' );
-							if ( headerQueue ) { headerQueue.textContent = queueCount; }
-							var bodyQueue = document.getElementById( 'dc-gi-queue-body-count' );
-							if ( bodyQueue ) { bodyQueue.textContent = queueCount; }
-						}
-
-						// Find the parent data row via the shared data-idx on the detail row.
-						var detailRow = btn.closest( '.dc-gi-is-detail-row' );
-						var idx       = detailRow ? detailRow.getAttribute( 'data-idx' ) : null;
-						var dataRow   = idx ? tbody.querySelector( '.dc-gi-is-data-row[data-idx="' + idx + '"]' ) : null;
-
-						// Update verdict badge → "Submitted" in the data row.
-						if ( dataRow ) {
-							var verdictCell = dataRow.querySelector( 'td:nth-child(3)' );
-							if ( verdictCell ) {
-								verdictCell.innerHTML = '<span style="color:#1d8cf8;font-weight:600">\u21BB Submitted</span>';
-							}
-							// Flash the row (same technique as Watchlist).
-							dataRow.classList.remove( 'dc-gi-wl-flash' );
-							dataRow.offsetHeight; // eslint-disable-line no-unused-expressions
-							dataRow.classList.add( 'dc-gi-wl-flash' );
-						}
-
-						// Update Last Submitted in the detail panel.
-						var now = new Date();
-						var nowStr = now.getFullYear() + '-'
-							+ String( now.getMonth() + 1 ).padStart( 2, '0' ) + '-'
-							+ String( now.getDate() ).padStart( 2, '0' ) + ' '
-							+ String( now.getHours() ).padStart( 2, '0' ) + ':'
-							+ String( now.getMinutes() ).padStart( 2, '0' );
-						if ( detailRow ) {
-							var submittedEl = detailRow.querySelector( '[data-is-submitted]' );
-							if ( submittedEl ) { submittedEl.textContent = fmtDate( nowStr ); }
-						}
-					} ).fail( function() {
-						window.alert( i18n.isResubmitError );
-						btn.disabled = false;
-						btn.textContent = i18n.isResubmit;
-					} );
-				} );
+			tbody.querySelectorAll( '.dc-gi-is-resubmit-btn' ).forEach( function( btn ) {
+				wireResubmitBtn( btn, tbody );
 			} );
 
 			// Wire Inspect Now buttons.
@@ -332,19 +340,43 @@
 						var dataRow = btn.closest( '.dc-gi-is-data-row' );
 						var idx     = dataRow ? dataRow.getAttribute( 'data-idx' ) : null;
 						if ( ! idx ) { return; }
-						var detailRow = tbody.querySelector( '.dc-gi-is-detail-row[data-idx="' + idx + '"]' );
+						var detailRow  = tbody.querySelector( '.dc-gi-is-detail-row[data-idx="' + idx + '"]' );
 						if ( ! detailRow ) { return; }
-						var wasOpen     = 'none' !== detailRow.style.display;
-						var pageOffset  = ( isPage - 1 ) * 25;
-						var rowIndex    = parseInt( idx, 10 ) - pageOffset;
-						var freshRow    = resp.data.row;
+						var pageOffset = ( isPage - 1 ) * 25;
+						var rowIndex   = parseInt( idx, 10 ) - pageOffset;
+						var freshRow   = resp.data.row;
 						if ( freshRow ) {
 							var tmp = document.createElement( 'tbody' );
 							tmp.innerHTML = buildDetailRow( freshRow, pageOffset, rowIndex );
 							var newDetail = tmp.querySelector( '.dc-gi-is-detail-row' );
 							if ( newDetail ) {
-								newDetail.style.display = wasOpen ? '' : 'none';
+								// Always expand after a fresh inspection.
+								newDetail.style.display = '';
 								detailRow.parentNode.replaceChild( newDetail, detailRow );
+
+								// Sync expand icon → open state.
+								var icon = dataRow.querySelector( '.dc-gi-is-expand-icon' );
+								if ( icon ) { icon.textContent = '\u2303'; }
+
+								// Scroll the fresh detail into view.
+								newDetail.scrollIntoView( { behavior: 'smooth', block: 'nearest' } );
+
+								// Update data-row cells (verdict, coverage, last inspected) from fresh data.
+								var cells = dataRow.querySelectorAll( 'td' );
+								if ( cells.length ) {
+									var newBadge = verdictBadge[ freshRow.index_verdict ]
+										|| '<span style="color:#7a8499">' + esc( freshRow.index_verdict ) + '</span>';
+									if ( cells[ 2 ] ) { cells[ 2 ].innerHTML = newBadge; }
+									if ( cells[ 3 ] ) {
+										cells[ 3 ].textContent = freshRow.coverage_state || '\u2014';
+										cells[ 3 ].title       = freshRow.coverage_state || '';
+									}
+									if ( cells[ 5 ] ) { cells[ 5 ].textContent = fmtDate( freshRow.last_inspected ); }
+								}
+
+								// Re-wire the re-submit button in the replaced detail row.
+								var newResubmit = newDetail.querySelector( '.dc-gi-is-resubmit-btn' );
+								if ( newResubmit ) { wireResubmitBtn( newResubmit, tbody ); }
 							}
 						}
 					} ).fail( function() {
