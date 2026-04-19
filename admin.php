@@ -109,13 +109,6 @@ function dc_gi_enqueue_scripts( string $hook ): void {
 		array(
 			'nonce'                => wp_create_nonce( 'dc_gi_ajax' ),
 			'ajaxurl'              => admin_url( 'admin-ajax.php' ),
-			'inspectBaseUrl'       => add_query_arg(
-				array(
-					'page' => 'dc-google-indexing',
-					'tab'  => 'index_status',
-				),
-				admin_url( 'admin.php' )
-			),
 			'analyticsDefaultDays' => max( 1, (int) ( $settings['analytics_days'] ?? 28 ) ),
 			'analyticsAge'         => $_analytics_age_hrs,
 			'watchActive'          => (bool) get_option( 'dc_gi_watch_active', false ),
@@ -1580,31 +1573,8 @@ function dc_gi_render_page(): void {
 	// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 	$queued_count = absint( isset( $_GET['count'] ) ? wp_unslash( $_GET['count'] ) : 0 );
 	// phpcs:ignore WordPress.Security.NonceVerification.Recommended
-	$inspect_url = esc_url_raw( wp_unslash( $_GET['inspect_url'] ?? '' ) );
-
 	$qa_results    = (array) get_option( 'dc_gi_qa_results', array() );
 	$qa_pending    = (array) get_option( 'dc_gi_qa_pending', array() );
-	$inspect_entry = null;
-	$inspect_meta  = null;
-	$inspect_error = '';
-
-	if ( 'index_status' === $tab && $inspect_url && class_exists( 'DC_GI_URL_Cache' ) ) {
-		$inspect_entry = DC_GI_URL_Cache::get_entry( $inspect_url );
-		if ( ! $inspect_entry ) {
-			$inspect_error = __( 'That URL is not in the local inspection cache yet.', 'dc-google-indexing' );
-		} elseif ( $has_sa && ! empty( $sa_decoded['client_email'] ) && ! empty( $sa_decoded['private_key'] ) ) {
-			$inspect_meta = DC_GI_JWT::get_url_notification_metadata( $sa_decoded, $inspect_url );
-			if ( is_wp_error( $inspect_meta ) ) {
-				$data = $inspect_meta->get_error_data();
-				if ( 404 !== ( $data['status'] ?? 0 ) ) {
-					// Only surface real errors (auth failure, permission denied, etc.).
-					// A 404 simply means the URL has no Indexing API submission history.
-					$inspect_error = $inspect_meta->get_error_message();
-				}
-				$inspect_meta = null;
-			}
-		}
-	}
 
 	$notices = array(
 		'saved'                 => array( 'success', __( 'Settings saved.', 'dc-google-indexing' ) ),
@@ -2996,90 +2966,6 @@ function dc_gi_render_page(): void {
 		<?php elseif ( 'index_status' === $tab ) : ?>
 
 		<!-- ===== INDEX STATUS ===== -->
-
-			<?php if ( $inspect_url ) : ?>
-		<div class="dc-gi-live-panel" style="max-width:980px;margin-bottom:22px">
-			<h2 style="margin-top:0"><?php esc_html_e( 'URL Inspection Detail', 'dc-google-indexing' ); ?></h2>
-			<p style="font-size:12px;color:#7a8499;word-break:break-all"><code><?php echo esc_html( $inspect_url ); ?></code></p>
-
-				<?php if ( ! $inspect_entry ) : ?>
-			<div class="dc-gi-callout warn">
-					<?php echo esc_html( $inspect_error ); ?>
-			</div>
-			<?php else : ?>
-			<div class="dc-gi-grid-3" style="grid-template-columns:repeat(3,minmax(0,1fr))">
-				<div class="dc-gi-callout info" style="margin:0">
-					<strong><?php esc_html_e( 'Index Verdict', 'dc-google-indexing' ); ?></strong><br>
-					<?php echo esc_html( (string) ( $inspect_entry['index_verdict'] ?? '—' ) ); ?>
-				</div>
-				<div class="dc-gi-callout info" style="margin:0">
-					<strong><?php esc_html_e( 'Coverage State', 'dc-google-indexing' ); ?></strong><br>
-					<?php echo esc_html( (string) ( $inspect_entry['coverage_state'] ?? '—' ) ); ?>
-				</div>
-				<div class="dc-gi-callout info" style="margin:0">
-					<strong><?php esc_html_e( 'Search Console Property', 'dc-google-indexing' ); ?></strong><br>
-					<code><?php echo esc_html( $property ); ?></code>
-				</div>
-			</div>
-
-				<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 24px;margin-top:14px;font-size:13px">
-					<div><strong><?php esc_html_e( 'Page Fetch', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( ! empty( $inspect_entry['page_fetch_state'] ) ? (string) $inspect_entry['page_fetch_state'] : '—' ); ?></div>
-					<div><strong><?php esc_html_e( 'Indexing State', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( ! empty( $inspect_entry['indexing_state'] ) ? (string) $inspect_entry['indexing_state'] : '—' ); ?></div>
-					<div><strong><?php esc_html_e( 'Robots.txt', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( ! empty( $inspect_entry['robots_txt_state'] ) ? (string) $inspect_entry['robots_txt_state'] : '—' ); ?></div>
-					<div><strong><?php esc_html_e( 'Crawled As', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( ! empty( $inspect_entry['crawled_as'] ) ? (string) $inspect_entry['crawled_as'] : '—' ); ?></div>
-				<div><strong><?php esc_html_e( 'Last Crawl', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( ! empty( $inspect_entry['last_crawl_time'] ) ? (string) $inspect_entry['last_crawl_time'] : '—' ); ?></div>
-				<div><strong><?php esc_html_e( 'Last Inspected', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( ! empty( $inspect_entry['last_inspected'] ) ? (string) $inspect_entry['last_inspected'] : '—' ); ?></div>
-					<div><strong><?php esc_html_e( 'Google Canonical', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( ! empty( $inspect_entry['google_canonical'] ) ? (string) $inspect_entry['google_canonical'] : '—' ); ?></div>
-					<div><strong><?php esc_html_e( 'User Canonical', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( ! empty( $inspect_entry['user_canonical'] ) ? (string) $inspect_entry['user_canonical'] : '—' ); ?></div>
-				<div><strong><?php esc_html_e( 'Last Submitted', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( ! empty( $inspect_entry['last_submitted'] ) ? (string) $inspect_entry['last_submitted'] : '—' ); ?></div>
-			</div>
-
-				<?php if ( ! empty( $inspect_entry['rich_results'] ) ) : ?>
-					<?php $rich_results = json_decode( (string) $inspect_entry['rich_results'], true ); ?>
-					<?php if ( is_array( $rich_results ) && ! empty( $rich_results ) ) : ?>
-				<h3 style="margin-bottom:8px"><?php esc_html_e( 'Rich Results', 'dc-google-indexing' ); ?></h3>
-				<div class="dc-gi-callout info">
-						<?php foreach ( $rich_results as $rich_item ) : ?>
-					<div style="margin-bottom:10px">
-						<strong><?php echo esc_html( (string) ( $rich_item['t'] ?? '' ) ); ?></strong>
-							<?php foreach ( (array) ( $rich_item['i'] ?? array() ) as $rich_child ) : ?>
-						<div style="margin-top:4px">
-								<?php echo esc_html( (string) ( $rich_child['n'] ?? '' ) ); ?>
-								<?php foreach ( (array) ( $rich_child['i'] ?? array() ) as $rich_issue ) : ?>
-							<div style="font-size:12px;color:#ff8d72">
-									<?php echo esc_html( (string) ( $rich_issue['m'] ?? '' ) ); ?>
-									<?php if ( ! empty( $rich_issue['s'] ) ) : ?>
-									(<?php echo esc_html( (string) $rich_issue['s'] ); ?>)
-								<?php endif; ?>
-							</div>
-							<?php endforeach; ?>
-						</div>
-						<?php endforeach; ?>
-					</div>
-					<?php endforeach; ?>
-				</div>
-				<?php endif; ?>
-			<?php endif; ?>
-
-			<h3 style="margin-bottom:8px"><?php esc_html_e( 'Indexing API Metadata', 'dc-google-indexing' ); ?></h3>
-				<?php if ( $inspect_meta ) : ?>
-			<div class="dc-gi-callout ok">
-				<div><strong><?php esc_html_e( 'Latest update notification', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( (string) ( $inspect_meta['latestUpdate']['notifyTime'] ?? '—' ) ); ?></div>
-				<div><strong><?php esc_html_e( 'Latest update type', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( (string) ( $inspect_meta['latestUpdate']['type'] ?? '—' ) ); ?></div>
-				<div><strong><?php esc_html_e( 'Latest removal notification', 'dc-google-indexing' ); ?>:</strong> <?php echo esc_html( (string) ( $inspect_meta['latestRemove']['notifyTime'] ?? '—' ) ); ?></div>
-			</div>
-			<?php elseif ( $inspect_error ) : ?>
-			<div class="dc-gi-callout warn">
-				<?php echo esc_html( $inspect_error ); ?>
-			</div>
-			<?php else : ?>
-			<div class="dc-gi-callout info">
-				<?php esc_html_e( 'No Indexing API metadata is available for this URL yet.', 'dc-google-indexing' ); ?>
-			</div>
-			<?php endif; ?>
-			<?php endif; ?>
-		</div>
-		<?php endif; ?>
 
 		<h2 style="margin-top:0"><?php esc_html_e( 'Index Status Overview', 'dc-google-indexing' ); ?></h2>
 		<p style="color:#8892a4;max-width:720px;font-size:13px;margin-bottom:20px"><?php esc_html_e( 'Live snapshot of all URLs in the inspection cache, grouped by coverage state and index verdict.', 'dc-google-indexing' ); ?></p>

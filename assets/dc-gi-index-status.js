@@ -10,7 +10,6 @@
 
 	var nonce          = dcGiPoll.nonce;
 	var ajaxUrl        = dcGiPoll.ajaxurl;
-	var inspectBaseUrl = dcGiPoll.inspectBaseUrl;
 	var i18n           = dcGiPoll.i18n;
 	var isPage         = 1;
 	var isFilter       = '';
@@ -187,7 +186,7 @@
 			html += '<div style="grid-column:1/-1"><span style="color:#7a8499;font-weight:600">' + esc( i18n.isRichResults ) + '</span>' + rr + '</div>';
 		}
 		html += '<div style="grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">'
-			+ '<a class="button button-small" href="' + inspectBaseUrl + '&inspect_url=' + encodeURIComponent( row.url ) + '">' + esc( i18n.isInspect ) + '</a>';
+			+ '<button type="button" class="button button-small dc-gi-is-inspect-detail-btn" data-url="' + esc( row.url ) + '">' + esc( i18n.isInspect ) + '</button>';
 		if ( 'PASS' !== row.index_verdict ) {
 			html += '<button type="button" class="button button-small dc-gi-is-resubmit-btn" data-url="' + esc( row.url ) + '">' + esc( i18n.isResubmit ) + '</button>';
 		}
@@ -201,8 +200,7 @@
 	// Called both by renderUrlTable (for all buttons after a full table render)
 	// and by the inspect-now handler (for the single button in a replaced detail row).
 
-	function wireResubmitBtn( btn, tbody ) {
-		btn.addEventListener( 'click', function( e ) {
+	function wireResubmitBtn( btn, tbody ) {		btn.addEventListener( 'click', function( e ) {
 			e.preventDefault();
 			e.stopPropagation();
 			var url = btn.getAttribute( 'data-url' ) || '';
@@ -267,6 +265,76 @@
 		} );
 	}
 
+	// ── Shared inspect-now AJAX + in-place update ────────────────────────────
+	// Called by both the ↻ column button and the "Inspect" button inside the accordion.
+
+	function doInspectNow( url, dataRow, detailRow, tbody, triggerBtn ) {
+		var origText           = triggerBtn.textContent;
+		triggerBtn.disabled    = true;
+		triggerBtn.textContent = i18n.isInspecting;
+		jQuery.post( ajaxUrl, { action: 'dc_gi_is_inspect_now', nonce: nonce, url: url },
+		function( resp ) {
+			triggerBtn.disabled    = false;
+			triggerBtn.textContent = origText;
+			if ( ! resp || ! resp.success ) {
+				window.alert( resp && resp.data ? resp.data : i18n.isInspectError );
+				return;
+			}
+			var freshRow = resp.data.row;
+			if ( ! freshRow ) { return; }
+			var pageOffset = ( isPage - 1 ) * 25;
+			var idx        = parseInt( detailRow.getAttribute( 'data-idx' ), 10 );
+			var rowIndex   = idx - pageOffset;
+			var tmp        = document.createElement( 'tbody' );
+			tmp.innerHTML  = buildDetailRow( freshRow, pageOffset, rowIndex );
+			var newDetail  = tmp.querySelector( '.dc-gi-is-detail-row' );
+			if ( ! newDetail ) { return; }
+
+			// Always open, replace in-place, sync icon, scroll into view.
+			newDetail.style.display = '';
+			detailRow.parentNode.replaceChild( newDetail, detailRow );
+			var icon = dataRow ? dataRow.querySelector( '.dc-gi-is-expand-icon' ) : null;
+			if ( icon ) { icon.textContent = '\u2303'; }
+			newDetail.scrollIntoView( { behavior: 'smooth', block: 'nearest' } );
+
+			// Update data-row verdict / coverage / last-inspected cells.
+			if ( dataRow ) {
+				var cells    = dataRow.querySelectorAll( 'td' );
+				var newBadge = verdictBadge[ freshRow.index_verdict ]
+					|| '<span style="color:#7a8499">' + esc( freshRow.index_verdict ) + '</span>';
+				if ( cells[ 2 ] ) { cells[ 2 ].innerHTML = newBadge; }
+				if ( cells[ 3 ] ) {
+					cells[ 3 ].textContent = freshRow.coverage_state || '\u2014';
+					cells[ 3 ].title       = freshRow.coverage_state || '';
+				}
+				if ( cells[ 5 ] ) { cells[ 5 ].textContent = fmtDate( freshRow.last_inspected ); }
+			}
+
+			// Re-wire interactive buttons in the newly inserted detail row.
+			var newResubmit = newDetail.querySelector( '.dc-gi-is-resubmit-btn' );
+			if ( newResubmit ) { wireResubmitBtn( newResubmit, tbody ); }
+			var newInspectBtn = newDetail.querySelector( '.dc-gi-is-inspect-detail-btn' );
+			if ( newInspectBtn ) { wireInspectDetailBtn( newInspectBtn, tbody ); }
+		} ).fail( function() {
+			triggerBtn.disabled    = false;
+			triggerBtn.textContent = origText;
+			window.alert( i18n.isInspectError );
+		} );
+	}
+
+	function wireInspectDetailBtn( btn, tbody ) {
+		btn.addEventListener( 'click', function( e ) {
+			e.preventDefault();
+			e.stopPropagation();
+			var url       = btn.getAttribute( 'data-url' ) || '';
+			if ( ! url ) { return; }
+			var detailRow = btn.closest( '.dc-gi-is-detail-row' );
+			var idx       = detailRow ? detailRow.getAttribute( 'data-idx' ) : null;
+			var dataRow   = idx ? tbody.querySelector( '.dc-gi-is-data-row[data-idx="' + idx + '"]' ) : null;
+			doInspectNow( url, dataRow, detailRow, tbody, btn );
+		} );
+	}
+
 	function renderUrlTable( rows, page, total ) {
 		var tbody = document.getElementById( 'dc-gi-is-url-tbody' );
 		if ( ! tbody ) { return; }
@@ -316,75 +384,25 @@
 				wireResubmitBtn( btn, tbody );
 			} );
 
-			// Wire Inspect Now buttons.
-			tbody.querySelectorAll( '.dc-gi-is-inspect-btn' ).forEach( function(btn) {
-				btn.addEventListener( 'click', function(e) {
+			// Wire Inspect Now column buttons (↻).
+			tbody.querySelectorAll( '.dc-gi-is-inspect-btn' ).forEach( function( btn ) {
+				btn.addEventListener( 'click', function( e ) {
 					e.preventDefault();
 					e.stopPropagation();
-					var url = btn.getAttribute( 'data-url' ) || '';
+					var url       = btn.getAttribute( 'data-url' ) || '';
 					if ( ! url ) { return; }
-					btn.disabled    = true;
-					btn.textContent = i18n.isInspecting;
-					jQuery.post( ajaxUrl, {
-						action: 'dc_gi_is_inspect_now',
-						nonce:  nonce,
-						url:    url
-					}, function(resp) {
-						btn.disabled    = false;
-						btn.textContent = '\u21BB';
-						if ( ! resp || ! resp.success ) {
-							window.alert( resp && resp.data ? resp.data : i18n.isInspectError );
-							return;
-						}
-						// Update the detail row in-place.
-						var dataRow = btn.closest( '.dc-gi-is-data-row' );
-						var idx     = dataRow ? dataRow.getAttribute( 'data-idx' ) : null;
-						if ( ! idx ) { return; }
-						var detailRow  = tbody.querySelector( '.dc-gi-is-detail-row[data-idx="' + idx + '"]' );
-						if ( ! detailRow ) { return; }
-						var pageOffset = ( isPage - 1 ) * 25;
-						var rowIndex   = parseInt( idx, 10 ) - pageOffset;
-						var freshRow   = resp.data.row;
-						if ( freshRow ) {
-							var tmp = document.createElement( 'tbody' );
-							tmp.innerHTML = buildDetailRow( freshRow, pageOffset, rowIndex );
-							var newDetail = tmp.querySelector( '.dc-gi-is-detail-row' );
-							if ( newDetail ) {
-								// Always expand after a fresh inspection.
-								newDetail.style.display = '';
-								detailRow.parentNode.replaceChild( newDetail, detailRow );
-
-								// Sync expand icon → open state.
-								var icon = dataRow.querySelector( '.dc-gi-is-expand-icon' );
-								if ( icon ) { icon.textContent = '\u2303'; }
-
-								// Scroll the fresh detail into view.
-								newDetail.scrollIntoView( { behavior: 'smooth', block: 'nearest' } );
-
-								// Update data-row cells (verdict, coverage, last inspected) from fresh data.
-								var cells = dataRow.querySelectorAll( 'td' );
-								if ( cells.length ) {
-									var newBadge = verdictBadge[ freshRow.index_verdict ]
-										|| '<span style="color:#7a8499">' + esc( freshRow.index_verdict ) + '</span>';
-									if ( cells[ 2 ] ) { cells[ 2 ].innerHTML = newBadge; }
-									if ( cells[ 3 ] ) {
-										cells[ 3 ].textContent = freshRow.coverage_state || '\u2014';
-										cells[ 3 ].title       = freshRow.coverage_state || '';
-									}
-									if ( cells[ 5 ] ) { cells[ 5 ].textContent = fmtDate( freshRow.last_inspected ); }
-								}
-
-								// Re-wire the re-submit button in the replaced detail row.
-								var newResubmit = newDetail.querySelector( '.dc-gi-is-resubmit-btn' );
-								if ( newResubmit ) { wireResubmitBtn( newResubmit, tbody ); }
-							}
-						}
-					} ).fail( function() {
-						btn.disabled    = false;
-						btn.textContent = '\u21BB';
-						window.alert( i18n.isInspectError );
-					} );
+					var dataRow   = btn.closest( '.dc-gi-is-data-row' );
+					var idx       = dataRow ? dataRow.getAttribute( 'data-idx' ) : null;
+					if ( ! idx ) { return; }
+					var detailRow = tbody.querySelector( '.dc-gi-is-detail-row[data-idx="' + idx + '"]' );
+					if ( ! detailRow ) { return; }
+					doInspectNow( url, dataRow, detailRow, tbody, btn );
 				} );
+			} );
+
+			// Wire "Inspect" buttons inside the accordion detail rows.
+			tbody.querySelectorAll( '.dc-gi-is-inspect-detail-btn' ).forEach( function( btn ) {
+				wireInspectDetailBtn( btn, tbody );
 			} );
 
 			// Reset expand-all state on each table render.
