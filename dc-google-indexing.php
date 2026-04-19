@@ -32,6 +32,7 @@ define( 'DC_GI_WATCH_CHECK_HOOK', 'dc_gi_watch_check_one_cron' );
 define( 'DC_GI_INSPECT_HOOK', 'dc_gi_inspect_batch' );
 define( 'DC_GI_ANALYTICS_HOOK', 'dc_gi_analytics_batch' );
 define( 'DC_GI_INSPECT_SIGNAL_HOOK', 'dc_gi_inspection_signal' );
+define( 'DC_GI_QA_REFRESH_HOOK', 'dc_gi_qa_refresh' );
 define( 'DC_GI_DAILY_CAP', 200 );
 
 // Coverage states that indicate a URL is not yet indexed and benefits from
@@ -107,6 +108,12 @@ function dc_gi_cron_schedules( array $schedules ): array {
 		$schedules['dc_gi_every1'] = array(
 			'interval' => MINUTE_IN_SECONDS,
 			'display'  => __( 'Every 1 Minute (DC Google Indexing)', 'dc-google-indexing' ),
+		);
+	}
+	if ( ! isset( $schedules['dc_gi_weekly'] ) ) {
+		$schedules['dc_gi_weekly'] = array(
+			'interval' => 7 * DAY_IN_SECONDS,
+			'display'  => __( 'Weekly (DC Google Indexing)', 'dc-google-indexing' ),
 		);
 	}
 	return $schedules;
@@ -920,6 +927,368 @@ function dc_gi_resolve_watchlist_status( string $current_status, string $coverag
 }
 
 // =============================================================================
+// QA SCAN HELPERS
+// =============================================================================
+
+/**
+ * Scan a single URL for on-page QA issues.
+ *
+ * Pure function — reads/writes no options.  Returns the result array suitable
+ * for storage in the dc_gi_qa_results option.
+ *
+ * @param string $url Fully qualified URL to scan.
+ * @return array Result with keys: url, http_status, issues, title, meta_desc,
+ *               h1, canonical, robots, content_hash, short_desc,
+ *               short_desc_hash, title_hash, word_count, scanned_at.
+ */
+function dc_gi_qa_scan_single_url( string $url ): array {
+	$issues          = array();
+	$http_status     = 0;
+	$title           = '';
+	$meta_desc       = '';
+	$h1              = '';
+	$canonical       = '';
+	$robots          = '';
+	$content_hash    = '';
+	$short_desc      = '';
+	$short_desc_hash = '';
+	$title_hash      = '';
+	$word_count      = 0;
+
+	$response = wp_remote_get(
+		$url,
+		array(
+			'timeout'    => 12,
+			'user-agent' => 'Mozilla/5.0 (compatible; DC-QA-Scanner/1.0)',
+		)
+	);
+
+	if ( is_wp_error( $response ) ) {
+		$issues[] = 'fetch_error';
+	} else {
+		$http_status = (int) wp_remote_retrieve_response_code( $response );
+		$body        = wp_remote_retrieve_body( $response );
+
+		if ( 404 === $http_status ) {
+			$issues[] = 'not_found';
+		} elseif ( $http_status >= 500 ) {
+			$issues[] = 'http_error';
+		} elseif ( $http_status >= 400 ) {
+			$issues[] = 'http_error';
+		} elseif ( $http_status >= 300 ) {
+			$issues[] = 'redirect';
+		}
+
+		if ( 200 === $http_status && $body ) {
+			// X-Robots-Tag header.
+			$x_robots = wp_remote_retrieve_header( $response, 'x-robots-tag' );
+			if ( $x_robots && false !== stripos( $x_robots, 'noindex' ) ) {
+				$issues[] = 'noindex';
+				$robots   = 'noindex (header)';
+			}
+
+			// Meta robots noindex.
+			if ( ! in_array( 'noindex', $issues, true ) ) {
+				if ( preg_match(
+					'/<meta[^>]+name=["\']robots["\'][^>]+content=["\']([^"\']*)["\'][^>]*>/i',
+					$body,
+					$m
+				) || preg_match(
+					'/<meta[^>]+content=["\']([^"\']*)["\'][^>]+name=["\']robots["\'][^>]*>/i',
+					$body,
+					$m
+				) ) {
+					if ( false !== stripos( $m[1], 'noindex' ) ) {
+						$issues[] = 'noindex';
+						$robots   = 'noindex (meta)';
+					}
+				}
+			}
+
+			// Title tag.
+			if ( preg_match( '/<title[^>]*>(.*?)<\/title>/is', $body, $m ) ) {
+				$title = trim( html_entity_decode( wp_strip_all_tags( $m[1] ), ENT_QUOTES, 'UTF-8' ) );
+			}
+			if ( '' === $title ) {
+				$issues[] = 'missing_title';
+			}
+
+			// Meta description.
+			if ( preg_match(
+				'/<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']*)["\'][^>]*>/i',
+				$body,
+				$m
+			) || preg_match(
+				'/<meta[^>]+content=["\']([^"\']*)["\'][^>]+name=["\']description["\'][^>]*>/i',
+				$body,
+				$m
+			) ) {
+				$meta_desc = trim( $m[1] );
+			}
+			if ( '' === $meta_desc ) {
+				$issues[] = 'missing_meta_desc';
+			} elseif ( mb_strlen( html_entity_decode( $meta_desc, ENT_QUOTES, 'UTF-8' ), 'UTF-8' ) <= 80 ) {
+				$issues[] = 'short_meta_desc';
+			}
+
+			// H1 tag.
+			if ( preg_match( '/<h1[^>]*>(.*?)<\/h1>/is', $body, $m ) ) {
+				$h1 = trim( html_entity_decode( wp_strip_all_tags( $m[1] ), ENT_QUOTES, 'UTF-8' ) );
+			}
+			if ( '' === $h1 ) {
+				$issues[] = 'missing_h1';
+			}
+
+			// Canonical.
+			if ( preg_match(
+				'/<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']*)["\'][^>]*>/i',
+				$body,
+				$m
+			) || preg_match(
+				'/<link[^>]+href=["\']([^"\']*)["\'][^>]+rel=["\']canonical["\'][^>]*>/i',
+				$body,
+				$m
+			) ) {
+				$canonical = trim( $m[1] );
+				if ( $canonical && rtrim( $canonical, '/' ) !== rtrim( $url, '/' ) ) {
+					$issues[] = 'non_canonical';
+				}
+			}
+
+			// Content hash for duplicate detection (first 10 KB of stripped content).
+			$stripped     = (string) preg_replace( '/\s+/', ' ', wp_strip_all_tags( $body ) );
+			$content_hash = md5( substr( $stripped, 0, 10000 ) );
+
+			// Word count for thin-content detection.
+			$word_count = str_word_count( $stripped );
+			if ( $word_count < 150 ) {
+				$issues[] = 'thin_content';
+			}
+
+			// Title-mismatch: check that at least 2 meaningful words from the title
+			// exist in the page body.
+			if ( '' !== $title ) {
+				$stop_words  = array(
+					'a',
+					'an',
+					'the',
+					'and',
+					'or',
+					'of',
+					'in',
+					'on',
+					'to',
+					'for',
+					'at',
+					'by',
+					'with',
+					'from',
+					'as',
+					'is',
+					'are',
+					'was',
+					'were',
+					'be',
+					'it',
+					'its',
+				);
+				$title_words = array_filter(
+					array_map( 'mb_strtolower', preg_split( '/[\W]+/u', $title, -1, PREG_SPLIT_NO_EMPTY ) ),
+					static fn( $w ) => mb_strlen( $w, 'UTF-8' ) >= 3 && ! in_array( $w, $stop_words, true )
+				);
+				$body_lower  = mb_strtolower( $stripped, 'UTF-8' );
+				$title_hash  = md5( mb_strtolower( $title, 'UTF-8' ) );
+				$matches     = 0;
+				foreach ( $title_words as $tw ) {
+					if ( false !== mb_strpos( $body_lower, $tw ) ) {
+						++$matches;
+					}
+				}
+				if ( count( $title_words ) > 0 && $matches < 2 ) {
+					$issues[] = 'title_mismatch';
+				}
+			}
+
+			// WooCommerce short description — for duplicate-short-description detection.
+			$short_desc_patterns = array(
+				'woocommerce-product-details__short-description',
+				'product-short-description',
+				'short-description',
+			);
+			foreach ( $short_desc_patterns as $sd_class ) {
+				if ( preg_match(
+					'/<div[^>]+class=["\'][^"\']* ' . preg_quote( $sd_class, '/' ) . '[^"\']["\'][^>]*>(.*?)<\/div\s*>/is',
+					$body,
+					$m
+				) || preg_match(
+					'/<div[^>]+class=["\']' . preg_quote( $sd_class, '/' ) . '[^"\'][^>]*>(.*?)<\/div\s*>/is',
+					$body,
+					$m
+				) ) {
+					$sd = trim( html_entity_decode( wp_strip_all_tags( $m[1] ), ENT_QUOTES, 'UTF-8' ) );
+					if ( $sd ) {
+						$short_desc      = $sd;
+						$short_desc_hash = md5( preg_replace( '/\s+/', ' ', mb_strtolower( $sd, 'UTF-8' ) ) );
+						break;
+					}
+				}
+			}
+		}
+	}
+
+	return array(
+		'url'             => $url,
+		'http_status'     => $http_status,
+		'issues'          => array_values( array_unique( $issues ) ),
+		'title'           => $title,
+		'meta_desc'       => $meta_desc,
+		'h1'              => $h1,
+		'canonical'       => $canonical,
+		'robots'          => $robots,
+		'content_hash'    => $content_hash,
+		'short_desc'      => $short_desc,
+		'short_desc_hash' => $short_desc_hash,
+		'title_hash'      => $title_hash,
+		'word_count'      => $word_count,
+		'scanned_at'      => time(),
+	);
+}
+
+/**
+ * Run cross-URL duplicate detection across all QA results.
+ *
+ * Checks content hash, title hash, and short-description hash for duplicates.
+ * Mutates $results in place — does not read/write any options.
+ *
+ * @param array $results The full dc_gi_qa_results array, passed by reference.
+ */
+function dc_gi_qa_run_duplicate_detection( array &$results ): void {
+	// — Duplicate full-page content (first 10 KB hash).
+	$hashes = array();
+	foreach ( $results as $r_url => $data ) {
+		if ( ! empty( $data['content_hash'] ) ) {
+			$hashes[ $data['content_hash'] ][] = $r_url;
+		}
+	}
+	foreach ( $hashes as $dup_urls ) {
+		if ( count( $dup_urls ) > 1 ) {
+			foreach ( $dup_urls as $dup_url ) {
+				if ( isset( $results[ $dup_url ] ) ) {
+					if ( ! in_array( 'duplicate_content', $results[ $dup_url ]['issues'], true ) ) {
+						$results[ $dup_url ]['issues'][] = 'duplicate_content';
+					}
+					$results[ $dup_url ]['duplicate_urls'] = array_values(
+						array_filter( $dup_urls, fn( $u ) => $u !== $dup_url )
+					);
+				}
+			}
+		}
+	}
+
+	// — Duplicate page title (same hardcoded SEO title across multiple URLs).
+	$t_hashes = array();
+	foreach ( $results as $r_url => $data ) {
+		if ( ! empty( $data['title_hash'] ) ) {
+			$t_hashes[ $data['title_hash'] ][] = $r_url;
+		}
+	}
+	foreach ( $t_hashes as $t_dup_urls ) {
+		if ( count( $t_dup_urls ) > 1 ) {
+			foreach ( $t_dup_urls as $t_dup_url ) {
+				if ( isset( $results[ $t_dup_url ] ) ) {
+					if ( ! in_array( 'duplicate_title', $results[ $t_dup_url ]['issues'], true ) ) {
+						$results[ $t_dup_url ]['issues'][] = 'duplicate_title';
+					}
+					$results[ $t_dup_url ]['duplicate_title_urls'] = array_values(
+						array_filter( $t_dup_urls, fn( $u ) => $u !== $t_dup_url )
+					);
+				}
+			}
+		}
+	}
+
+	// — Duplicate WooCommerce short description (normalised hash).
+	$sd_hashes = array();
+	foreach ( $results as $r_url => $data ) {
+		if ( ! empty( $data['short_desc_hash'] ) ) {
+			$sd_hashes[ $data['short_desc_hash'] ][] = $r_url;
+		}
+	}
+	foreach ( $sd_hashes as $sd_dup_urls ) {
+		if ( count( $sd_dup_urls ) > 1 ) {
+			foreach ( $sd_dup_urls as $sd_dup_url ) {
+				if ( isset( $results[ $sd_dup_url ] ) ) {
+					if ( ! in_array( 'duplicate_short_desc', $results[ $sd_dup_url ]['issues'], true ) ) {
+						$results[ $sd_dup_url ]['issues'][] = 'duplicate_short_desc';
+					}
+					$results[ $sd_dup_url ]['duplicate_short_desc_urls'] = array_values(
+						array_filter( $sd_dup_urls, fn( $u ) => $u !== $sd_dup_url )
+					);
+				}
+			}
+		}
+	}
+}
+
+// =============================================================================
+// QA REFRESH CRON — weekly background re-scan of issue-URLs
+// =============================================================================
+
+add_action( DC_GI_QA_REFRESH_HOOK, 'dc_gi_run_qa_refresh' );
+/**
+ * WP-Cron callback: re-scan URLs in dc_gi_qa_results that have issues.
+ * Processes 5 URLs per run; clean results are removed automatically.
+ * On final batch, runs duplicate detection and stores a last-refresh timestamp.
+ */
+function dc_gi_run_qa_refresh(): void {
+	$offset = (int) get_option( 'dc_gi_qa_refresh_offset', 0 );
+
+	if ( 0 === $offset ) {
+		$results      = (array) get_option( 'dc_gi_qa_results', array() );
+		$refresh_list = array_values(
+			array_keys( array_filter( $results, fn( $r ) => ! empty( $r['issues'] ) ) )
+		);
+		if ( empty( $refresh_list ) ) {
+			update_option( 'dc_gi_qa_last_refresh', time(), false );
+			return;
+		}
+		update_option( 'dc_gi_qa_refresh_list', $refresh_list, false );
+	} else {
+		$refresh_list = (array) get_option( 'dc_gi_qa_refresh_list', array() );
+		if ( empty( $refresh_list ) ) {
+			delete_option( 'dc_gi_qa_refresh_offset' );
+			update_option( 'dc_gi_qa_last_refresh', time(), false );
+			return;
+		}
+	}
+
+	$batch   = array_slice( $refresh_list, $offset, 5 );
+	$results = (array) get_option( 'dc_gi_qa_results', array() );
+
+	foreach ( $batch as $url ) {
+		$scanned = dc_gi_qa_scan_single_url( $url );
+		if ( empty( $scanned['issues'] ) ) {
+			unset( $results[ $url ] );
+		} else {
+			$results[ $url ] = $scanned;
+		}
+	}
+
+	$next_offset = $offset + count( $batch );
+
+	if ( $next_offset >= count( $refresh_list ) ) {
+		dc_gi_qa_run_duplicate_detection( $results );
+		update_option( 'dc_gi_qa_results', $results, false );
+		delete_option( 'dc_gi_qa_refresh_offset' );
+		delete_option( 'dc_gi_qa_refresh_list' );
+		update_option( 'dc_gi_qa_last_refresh', time(), false );
+	} else {
+		update_option( 'dc_gi_qa_results', $results, false );
+		update_option( 'dc_gi_qa_refresh_offset', $next_offset, false );
+	}
+}
+
+// =============================================================================
 // ACTIVATION / DEACTIVATION
 // =============================================================================
 
@@ -941,6 +1310,9 @@ function dc_gi_activate(): void {
 	}
 	if ( ! wp_next_scheduled( DC_GI_ANALYTICS_HOOK ) ) {
 		wp_schedule_event( time() + 120, 'twicedaily', DC_GI_ANALYTICS_HOOK );
+	}
+	if ( ! wp_next_scheduled( DC_GI_QA_REFRESH_HOOK ) ) {
+		wp_schedule_event( time() + 3 * HOUR_IN_SECONDS, 'dc_gi_weekly', DC_GI_QA_REFRESH_HOOK );
 	}
 }
 
@@ -976,6 +1348,10 @@ function dc_gi_maybe_reschedule_crons(): void {
 	// Analytics cron: runs twice daily to fetch Search Analytics data.
 	if ( ! wp_next_scheduled( DC_GI_ANALYTICS_HOOK ) ) {
 		wp_schedule_event( time() + 120, 'twicedaily', DC_GI_ANALYTICS_HOOK );
+	}
+	// QA refresh cron: weekly re-scan of issue-URLs.
+	if ( ! wp_next_scheduled( DC_GI_QA_REFRESH_HOOK ) ) {
+		wp_schedule_event( time() + 3 * HOUR_IN_SECONDS, 'dc_gi_weekly', DC_GI_QA_REFRESH_HOOK );
 	}
 	// Restore the recurring watchlist check-one cron if it was lost but is still needed.
 	if ( get_option( 'dc_gi_watch_active', false ) && ! wp_next_scheduled( DC_GI_WATCH_CHECK_HOOK ) ) {
@@ -1088,6 +1464,9 @@ function dc_gi_deactivate(): void {
 	wp_clear_scheduled_hook( DC_GI_WATCH_CHECK_HOOK );
 	wp_clear_scheduled_hook( DC_GI_INSPECT_HOOK );
 	wp_clear_scheduled_hook( DC_GI_ANALYTICS_HOOK );
+	wp_clear_scheduled_hook( DC_GI_QA_REFRESH_HOOK );
 	delete_option( 'dc_gi_watch_active' );
 	delete_option( 'dc_gi_watch_offset' );
+	delete_option( 'dc_gi_qa_refresh_offset' );
+	delete_option( 'dc_gi_qa_refresh_list' );
 }

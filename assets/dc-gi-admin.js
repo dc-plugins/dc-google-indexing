@@ -293,16 +293,16 @@
 			var $b = $('#dc-gi-qa-badge');
 			$b.attr('class', 'dc-gi-poll-badge stopped');
 			$b.html('<span>' + dcGiPoll.i18n.qaStopped + '</span>');
-			$('#dc-gi-qa-start-btn').prop('disabled', false);
+			var canStart = (parseInt(dcGiPoll.qaPendingCount, 10) > 0) || (parseInt(dcGiPoll.qaWithIssues, 10) > 0);
+			$('#dc-gi-qa-start-btn').prop('disabled', !canStart);
 			$('#dc-gi-qa-stop-btn').prop('disabled', true);
 		}
 
-		function qaSetBadgeDone() {
+		function qaSetBadgeDone(hasMoreIssues) {
 			var $b = $('#dc-gi-qa-badge');
 			$b.attr('class', 'dc-gi-poll-badge done');
 			$b.html('<span>' + dcGiPoll.i18n.qaDone + '</span>');
-			// Pending list was cleared by the scan — keep Start disabled until new URLs are flagged.
-			$('#dc-gi-qa-start-btn').prop('disabled', true);
+			$('#dc-gi-qa-start-btn').prop('disabled', !hasMoreIssues);
 			$('#dc-gi-qa-stop-btn').prop('disabled', true);
 		}
 
@@ -324,11 +324,16 @@
 				issuesHtml = '<span style="color:#00f2c3;font-size:12px">\u2713 No issues</span>';
 			}
 			var statusColor = httpStatus === 200 ? '#00f2c3' : (httpStatus >= 400 ? '#fd5d93' : '#ff8d72');
-			var row = '<tr data-qa-url="' + $('<span>').text(url).html() + '">' +
-				'<td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><a href="' + $('<span>').text(url).html() + '" target="_blank" rel="noopener noreferrer">' + $('<span>').text(url).html() + '</a></td>' +
+			var escapedUrl = $('<span>').text(url).html();
+			var row = '<tr data-qa-url="' + escapedUrl + '">' +
+				'<td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><a href="' + escapedUrl + '" target="_blank" rel="noopener noreferrer">' + escapedUrl + '</a></td>' +
 				'<td style="color:' + statusColor + ';font-weight:600">' + (httpStatus || '—') + '</td>' +
 				'<td>' + issuesHtml + '</td>' +
 				'<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#7a8499">' + $('<span>').text(title || '—').html() + '</td>' +
+				'<td style="white-space:nowrap;text-align:right">' +
+					'<button class="button button-small dc-gi-qa-rescan-btn" data-url="' + escapedUrl + '" title="Re-scan">\u21BA</button>' +
+					' <button class="button button-small dc-gi-qa-dismiss-btn" data-url="' + escapedUrl + '" title="Dismiss">\u2715</button>' +
+				'</td>' +
 				'</tr>';
 			$tbody.prepend(row);
 
@@ -398,7 +403,7 @@
 					if (d.done) {
 						$('#dc-gi-qa-prog-label').text('\u2705 Scan complete \u2014 ' + total + ' URLs checked.');
 						$('#dc-gi-qa-prog-bar').css('background','#00f2c3');
-						qaSetBadgeDone();
+						qaSetBadgeDone(!!d.has_more_issues);
 					} else {
 						qaScanOne(d.next);
 					}
@@ -428,6 +433,67 @@
 					$row.toggle(issueHtml.indexOf(issueLabels[val] || val) !== -1);
 				}
 			});
+		});
+
+		// ── Per-row rescan ─────────────────────────────────────────────────────
+
+		$(document).on('click', '.dc-gi-qa-rescan-btn', function() {
+			var $btn = $(this);
+			var url  = $btn.data('url');
+			if (!url) return;
+			$btn.prop('disabled', true).text('\u2026');
+			$.post(dcGiPoll.ajaxurl, { action: 'dc_gi_qa_rescan_one', nonce: dcGiPoll.nonce, url: url })
+			.done(function(r) {
+				$btn.prop('disabled', false).text('\u21BA');
+				if (!r || !r.success) return;
+				var d = r.data;
+				var $row = $('#dc-gi-qa-tbody tr').filter(function() {
+					return $(this).attr('data-qa-url') === url;
+				});
+				if (d.clean) {
+					$row.remove();
+					qaIssuesCount = Math.max(0, qaIssuesCount - 1);
+					qaTotalCount  = Math.max(0, qaTotalCount - 1);
+					$('#dc-gi-qa-stat-issues').text(qaIssuesCount);
+					$('#dc-gi-qa-stat-total').text(qaTotalCount);
+				} else {
+					var statusColor = d.http_status === 200 ? '#00f2c3' : (d.http_status >= 400 ? '#fd5d93' : '#ff8d72');
+					$row.find('td').eq(1).css('color', statusColor).css('font-weight', '600').text(d.http_status || '\u2014');
+					var issuesHtml = '';
+					for (var i = 0; i < d.issues.length; i++) { issuesHtml += issueBadge(d.issues[i]); }
+					$row.find('td').eq(2).html(issuesHtml);
+					$row.find('td').eq(3).text(d.title || '\u2014');
+				}
+			})
+			.fail(function() { $btn.prop('disabled', false).text('\u21BA'); });
+		});
+
+		// ── Per-row dismiss ────────────────────────────────────────────────────
+
+		$(document).on('click', '.dc-gi-qa-dismiss-btn', function() {
+			var $btn = $(this);
+			var url  = $btn.data('url');
+			if (!url) return;
+			$btn.prop('disabled', true).text('\u2026');
+			$.post(dcGiPoll.ajaxurl, { action: 'dc_gi_qa_dismiss_one', nonce: dcGiPoll.nonce, url: url })
+			.done(function(r) {
+				if (!r || !r.success) { $btn.prop('disabled', false).text('\u2715'); return; }
+				var $row = $('#dc-gi-qa-tbody tr').filter(function() {
+					return $(this).attr('data-qa-url') === url;
+				});
+				var isClean = $row.find('td').eq(2).text().trim() === '\u2713 No issues';
+				$row.remove();
+				qaTotalCount = Math.max(0, qaTotalCount - 1);
+				$('#dc-gi-qa-stat-total').text(qaTotalCount);
+				if (isClean) {
+					qaCleanCount = Math.max(0, qaCleanCount - 1);
+					$('#dc-gi-qa-stat-clean').text(qaCleanCount);
+				} else {
+					qaIssuesCount = Math.max(0, qaIssuesCount - 1);
+					$('#dc-gi-qa-stat-issues').text(qaIssuesCount);
+				}
+			})
+			.fail(function() { $btn.prop('disabled', false).text('\u2715'); });
 		});
 
 		// ── Button bindings ────────────────────────────────────────────────────
