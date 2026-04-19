@@ -166,7 +166,9 @@
 				+ '<a href="' + esc(uc) + '" target="_blank" rel="noopener noreferrer" style="color:#6ab0f5;font-size:11px">' + esc(uc) + '</a></div>';
 		}
 		if ( row.last_submitted && '0000-00-00 00:00:00' !== row.last_submitted ) {
-			html += '<div><span style="color:#7a8499">' + esc( i18n.isLastSubmitted ) + ':</span> <span style="color:#c8d0e0">' + esc(fmtDate(row.last_submitted)) + '</span></div>';
+			html += '<div><span style="color:#7a8499">' + esc( i18n.isLastSubmitted ) + ':</span> <span data-is-submitted style="color:#c8d0e0">' + esc(fmtDate(row.last_submitted)) + '</span></div>';
+		} else {
+			html += '<div><span style="color:#7a8499">' + esc( i18n.isLastSubmitted ) + ':</span> <span data-is-submitted style="color:#c8d0e0">\u2014</span></div>';
 		}
 
 		// Search Analytics data.
@@ -266,12 +268,43 @@
 							return;
 						}
 						btn.textContent = i18n.isQueued;
+
+						// Update queue badge.
 						var queueCount = resp.data && resp.data.queue_count ? resp.data.queue_count : null;
 						if ( null !== queueCount ) {
 							var headerQueue = document.getElementById( 'dc-gi-header-queue' );
 							if ( headerQueue ) { headerQueue.textContent = queueCount; }
 							var bodyQueue = document.getElementById( 'dc-gi-queue-body-count' );
 							if ( bodyQueue ) { bodyQueue.textContent = queueCount; }
+						}
+
+						// Find the parent data row via the shared data-idx on the detail row.
+						var detailRow = btn.closest( '.dc-gi-is-detail-row' );
+						var idx       = detailRow ? detailRow.getAttribute( 'data-idx' ) : null;
+						var dataRow   = idx ? tbody.querySelector( '.dc-gi-is-data-row[data-idx="' + idx + '"]' ) : null;
+
+						// Update verdict badge → "Submitted" in the data row.
+						if ( dataRow ) {
+							var verdictCell = dataRow.querySelector( 'td:nth-child(3)' );
+							if ( verdictCell ) {
+								verdictCell.innerHTML = '<span style="color:#1d8cf8;font-weight:600">\u21BB Submitted</span>';
+							}
+							// Flash the row (same technique as Watchlist).
+							dataRow.classList.remove( 'dc-gi-wl-flash' );
+							dataRow.offsetHeight; // eslint-disable-line no-unused-expressions
+							dataRow.classList.add( 'dc-gi-wl-flash' );
+						}
+
+						// Update Last Submitted in the detail panel.
+						var now = new Date();
+						var nowStr = now.getFullYear() + '-'
+							+ String( now.getMonth() + 1 ).padStart( 2, '0' ) + '-'
+							+ String( now.getDate() ).padStart( 2, '0' ) + ' '
+							+ String( now.getHours() ).padStart( 2, '0' ) + ':'
+							+ String( now.getMinutes() ).padStart( 2, '0' );
+						if ( detailRow ) {
+							var submittedEl = detailRow.querySelector( '[data-is-submitted]' );
+							if ( submittedEl ) { submittedEl.textContent = fmtDate( nowStr ); }
 						}
 					} ).fail( function() {
 						window.alert( i18n.isResubmitError );
