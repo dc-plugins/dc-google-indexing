@@ -198,6 +198,14 @@ function dc_gi_enqueue_scripts( string $hook ): void {
 				'isAmp'                      => __( 'AMP', 'dc-google-indexing' ),
 				'isSitemaps'                 => __( 'Sitemaps', 'dc-google-indexing' ),
 				'isViewInGsc'                => __( 'View in Google Search Console \u2192', 'dc-google-indexing' ),
+				'isCoverage'                 => __( 'Coverage', 'dc-google-indexing' ),
+				'isCrawl'                    => __( 'Crawl', 'dc-google-indexing' ),
+				'isCrawlTime'                => __( 'Crawl time', 'dc-google-indexing' ),
+				'isCrawlAllowed'             => __( 'Crawl allowed', 'dc-google-indexing' ),
+				'isIndexingAllowed'          => __( 'Indexing allowed', 'dc-google-indexing' ),
+				'isYes'                      => __( 'Yes', 'dc-google-indexing' ),
+				'isNo'                       => __( 'No', 'dc-google-indexing' ),
+				'isCanonicalPending'         => __( 'To be determined after indexing', 'dc-google-indexing' ),
 			),
 		)
 	);

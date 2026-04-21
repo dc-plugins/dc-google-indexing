@@ -106,84 +106,149 @@
 		var items;
 		try { items = JSON.parse( jsonStr ); } catch(e) { return ''; }
 		if ( ! items || ! items.length ) { return ''; }
-		var html = '<div style="margin-top:8px">';
-		items.forEach( function(rtype) {
-			html += '<div style="margin-bottom:6px"><span style="font-size:11px;font-weight:600;color:#c8d0e0">' + esc(rtype.t || '') + '</span>';
-			(rtype.i||[]).forEach( function(item) {
-				if ( item.n ) { html += '<span style="font-size:11px;color:#7a8499;margin-left:6px">\u2014 ' + esc(item.n) + '</span>'; }
-				(item.i||[]).forEach( function(iss) {
-					var col = 'WARNING' === iss.s ? '#ff8d72' : '#fd5d93';
-					html += '<div style="font-size:11px;margin-left:12px;color:' + col + '">\u26a0 ' + esc(iss.m) + ' <span style="opacity:.6">(' + esc(iss.s) + ')</span></div>';
-				});
-			});
-			html += '</div>';
-		});
-		return html + '</div>';
+		var html = '';
+		items.forEach( function( rtype ) {
+			var hasError   = false;
+			var hasWarning = false;
+			var flatIssues = [];
+			( rtype.i || [] ).forEach( function( item ) {
+				( item.i || [] ).forEach( function( iss ) {
+					if ( 'ERROR'   === iss.s ) { hasError   = true; }
+					if ( 'WARNING' === iss.s ) { hasWarning = true; }
+					flatIssues.push( { m: iss.m, s: iss.s, n: item.n } );
+				} );
+			} );
+			var validCount = ( rtype.i || [] ).filter( function( item ) {
+				return ! ( item.i || [] ).some( function( iss ) { return 'ERROR' === iss.s; } );
+			} ).length;
+			var iconColor = hasError ? '#fd5d93' : '#00f2c3';
+			var icon      = hasError ? '\u2717' : '\u2713';
+			html += '<div style="display:flex;align-items:flex-start;gap:8px;padding:5px 0;border-bottom:1px solid rgba(45,53,85,.3)">'
+				+ '<span style="color:' + iconColor + ';font-weight:700;font-size:13px;line-height:1.4">' + icon + '</span>'
+				+ '<div style="flex:1">'
+				+ '<span style="color:#c8d0e0;font-weight:600;font-size:12px">' + esc( rtype.t || '' ) + '</span>';
+			if ( validCount > 0 ) {
+				html += ' <span style="color:#7a8499;font-size:11px">\u2014 ' + validCount + ' valid</span>';
+			}
+			if ( hasWarning && ! hasError ) {
+				html += ' <span style="color:#ff8d72;font-size:11px">\u26a0 non-critical issues</span>';
+			}
+			flatIssues.forEach( function( iss ) {
+				var col = 'ERROR' === iss.s ? '#fd5d93' : '#ff8d72';
+				html += '<div style="font-size:11px;color:' + col + ';margin-top:3px">\u26a0 ';
+				if ( iss.n ) { html += '<span style="color:#7a8499">' + esc( iss.n ) + ':</span> '; }
+				html += esc( iss.m ) + '</div>';
+			} );
+			html += '</div></div>';
+		} );
+		return html;
 	}
 
 	function buildDetailRow( row, offset, i, extra ) {
 		var gc  = row.google_canonical || '';
 		var uc  = row.user_canonical   || '';
-		var ca  = row.crawled_as        || '';
-		var rts = row.robots_txt_state  || '';
-		var idx = row.indexing_state    || '';
+		var rts = row.robots_txt_state || '';
+		var idx = row.indexing_state   || '';
 		var rr  = buildRichResults( row.rich_results || '' );
+
+		var sHead = function( t, first ) {
+			return '<div style="font-size:10px;font-weight:700;color:#7a8499;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px'
+				+ ( first ? '' : ';border-top:1px solid rgba(45,53,85,.6);margin-top:12px;padding-top:10px' )
+				+ '">' + t + '</div>';
+		};
+		var yesNo = function( ok ) {
+			return ok
+				? '<span style="color:#00f2c3;font-weight:600">\u2713 ' + esc( i18n.isYes ) + '</span>'
+				: '<span style="color:#fd5d93;font-weight:600">\u2717 ' + esc( i18n.isNo  ) + '</span>';
+		};
+		var grid2 = '<div style="display:grid;grid-template-columns:minmax(160px,auto) 1fr;gap:5px 16px;align-items:baseline">';
 
 		var html = '<tr class="dc-gi-is-detail-row" data-idx="' + (offset+i) + '" style="display:none">'
 			+ '<td colspan="8" style="background:#111827;padding:0 0 0 48px;border-top:none">'
-			+ '<div style="padding:12px 16px 12px 0;display:grid;grid-template-columns:1fr 1fr;gap:8px 24px;font-size:12px;max-width:900px">';
+			+ '<div style="padding:12px 16px 12px 0;font-size:12px;max-width:900px">';
 
-		if ( rts ) {
-			html += '<div><span style="color:#7a8499">' + esc( i18n.isRobotsTxt ) + ':</span> '
-				+ '<span style="color:' + ('ALLOWED' === rts ? '#00f2c3' : '#fd5d93') + '">' + esc(fmtState(rts)) + '</span></div>';
+		// ── Coverage ─────────────────────────────────────────────────────────────
+		if ( row.coverage_state ) {
+			html += sHead( esc( i18n.isCoverage ), true );
+			html += '<div style="color:#c8d0e0">' + esc( row.coverage_state ) + '</div>';
 		}
-		if ( idx ) {
-			var idxOk = 'INDEXING_ALLOWED' === idx;
-			html += '<div><span style="color:#7a8499">' + esc( i18n.isIndexing ) + ':</span> '
-				+ '<span style="color:' + (idxOk ? '#00f2c3' : '#ff8d72') + '">' + esc(fmtState(idx)) + '</span></div>';
+
+		// ── Crawl ─────────────────────────────────────────────────────────────────
+		if ( row.last_crawl_time || row.crawled_as || rts || row.page_fetch_state || idx ) {
+			html += sHead( esc( i18n.isCrawl ), ! row.coverage_state );
+			html += grid2;
+			if ( row.last_crawl_time ) {
+				html += '<span style="color:#7a8499">' + esc( i18n.isCrawlTime ) + ':</span>'
+					+ '<span style="color:#c8d0e0">' + esc( fmtDate( row.last_crawl_time ) ) + '</span>';
+			}
+			if ( row.crawled_as ) {
+				html += '<span style="color:#7a8499">' + esc( i18n.isCrawledAs ) + ':</span>'
+					+ '<span style="color:#c8d0e0">' + esc( fmtState( row.crawled_as ) ) + '</span>';
+			}
+			if ( rts ) {
+				html += '<span style="color:#7a8499">' + esc( i18n.isCrawlAllowed ) + ':</span>'
+					+ yesNo( 'ALLOWED' === rts );
+			}
+			if ( row.page_fetch_state ) {
+				var pfOk = 'SUCCESSFUL' === row.page_fetch_state;
+				html += '<span style="color:#7a8499">' + esc( i18n.isPageFetch ) + ':</span>'
+					+ ( pfOk
+						? '<span style="color:#00f2c3;font-weight:600">\u2713 ' + esc( fmtState( row.page_fetch_state ) ) + '</span>'
+						: '<span style="color:#fd5d93">' + esc( fmtState( row.page_fetch_state ) ) + '</span>' );
+			}
+			if ( idx ) {
+				html += '<span style="color:#7a8499">' + esc( i18n.isIndexingAllowed ) + ':</span>'
+					+ yesNo( 'INDEXING_ALLOWED' === idx );
+			}
+			html += '</div>';
 		}
-		if ( ca ) {
-			html += '<div><span style="color:#7a8499">' + esc( i18n.isCrawledAs ) + ':</span> <span style="color:#c8d0e0">' + esc(fmtState(ca)) + '</span></div>';
+
+		// ── Indexing ──────────────────────────────────────────────────────────────
+		if ( gc || uc ) {
+			html += sHead( esc( i18n.isIndexing ) );
+			html += grid2;
+			if ( uc ) {
+				html += '<span style="color:#7a8499;white-space:nowrap">' + esc( i18n.isUserCanonical ) + ':</span>'
+					+ '<a href="' + esc( uc ) + '" target="_blank" rel="noopener noreferrer" style="color:#6ab0f5;font-size:11px;word-break:break-all">' + esc( uc ) + '</a>';
+			}
+			html += '<span style="color:#7a8499;white-space:nowrap">' + esc( i18n.isGoogleCanonical ) + ':</span>';
+			if ( gc ) {
+				var gcMatch = gc === row.url;
+				html += '<a href="' + esc( gc ) + '" target="_blank" rel="noopener noreferrer" style="color:' + ( gcMatch ? '#00f2c3' : '#ff8d72' ) + ';font-size:11px;word-break:break-all">' + esc( gc ) + '</a>'
+					+ ( ! gcMatch ? ' <span style="color:#ff8d72;font-size:11px">(' + esc( i18n.isDiffersFromUserCanonical ) + ')</span>' : '' );
+			} else {
+				html += '<span style="color:#7a8499;font-style:italic;font-size:11px">' + esc( i18n.isCanonicalPending ) + '</span>';
+			}
+			html += '</div>';
 		}
-		if ( row.page_fetch_state ) {
-			html += '<div><span style="color:#7a8499">' + esc( i18n.isPageFetch ) + ':</span> <span style="color:#c8d0e0">' + esc(fmtState(row.page_fetch_state)) + '</span></div>';
-		}
-		if ( gc ) {
-			var gcMatch = gc === row.url;
-			html += '<div style="grid-column:1/-1"><span style="color:#7a8499">' + esc( i18n.isGoogleCanonical ) + ':</span> '
-				+ '<a href="' + esc(gc) + '" target="_blank" rel="noopener noreferrer" style="color:' + (gcMatch ? '#00f2c3' : '#ff8d72') + ';font-size:11px">' + esc(gc) + '</a>'
-				+ (gcMatch ? '' : ' <span style="color:#ff8d72;font-size:11px">(' + esc( i18n.isDiffersFromUserCanonical ) + ')</span>') + '</div>';
-		}
-		if ( uc && uc !== gc ) {
-			html += '<div style="grid-column:1/-1"><span style="color:#7a8499">' + esc( i18n.isUserCanonical ) + ':</span> '
-				+ '<a href="' + esc(uc) + '" target="_blank" rel="noopener noreferrer" style="color:#6ab0f5;font-size:11px">' + esc(uc) + '</a></div>';
-		}
+
+		// ── Last submitted ────────────────────────────────────────────────────────
 		if ( row.last_submitted && '0000-00-00 00:00:00' !== row.last_submitted ) {
-			html += '<div><span style="color:#7a8499">' + esc( i18n.isLastSubmitted ) + ':</span> <span data-is-submitted style="color:#c8d0e0">' + esc(fmtDate(row.last_submitted)) + '</span></div>';
+			html += '<div style="margin-top:8px"><span style="color:#7a8499">' + esc( i18n.isLastSubmitted ) + ':</span> <span data-is-submitted style="color:#c8d0e0">' + esc( fmtDate( row.last_submitted ) ) + '</span></div>';
 		} else {
-			html += '<div><span style="color:#7a8499">' + esc( i18n.isLastSubmitted ) + ':</span> <span data-is-submitted style="color:#c8d0e0">\u2014</span></div>';
+			html += '<div style="margin-top:8px"><span style="color:#7a8499">' + esc( i18n.isLastSubmitted ) + ':</span> <span data-is-submitted style="color:#c8d0e0">\u2014</span></div>';
 		}
 
-		// Search Analytics data.
-		if ( row.sa_updated ) {
-			var ctr    = row.sa_ctr      != null ? ( parseFloat( row.sa_ctr )      * 100 ).toFixed( 1 ) + '%' : '\u2014';
-			var pos    = row.sa_position != null ? parseFloat( row.sa_position ).toFixed( 1 )                 : '\u2014';
-			var clicks = row.sa_clicks   != null ? parseInt( row.sa_clicks, 10 )                              : '\u2014';
-			var impr   = row.sa_impressions != null ? parseInt( row.sa_impressions, 10 )                      : '\u2014';
-			html += '<div style="grid-column:1/-1;margin-top:4px;padding-top:8px;border-top:1px solid rgba(45,53,85,.6)">'
-				+ '<span style="color:#7a8499;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px">' + esc( i18n.isSearchAnalytics ) + '</span>'
-				+ '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px">'
-				+ '<div style="background:rgba(255,255,255,.04);border-radius:5px;padding:8px 10px;text-align:center"><div style="font-size:18px;font-weight:700;color:#1d8cf8">' + esc(String(clicks)) + '</div><div style="font-size:10px;color:#7a8499;margin-top:3px;text-transform:uppercase">' + esc( i18n.isClicks ) + '</div></div>'
-				+ '<div style="background:rgba(255,255,255,.04);border-radius:5px;padding:8px 10px;text-align:center"><div style="font-size:18px;font-weight:700;color:#c8d0e0">' + esc(String(impr)) + '</div><div style="font-size:10px;color:#7a8499;margin-top:3px;text-transform:uppercase">' + esc( i18n.isImpressions ) + '</div></div>'
-				+ '<div style="background:rgba(255,255,255,.04);border-radius:5px;padding:8px 10px;text-align:center"><div style="font-size:18px;font-weight:700;color:#00f2c3">' + esc(ctr) + '</div><div style="font-size:10px;color:#7a8499;margin-top:3px;text-transform:uppercase">' + esc( i18n.isCtr ) + '</div></div>'
-				+ '<div style="background:rgba(255,255,255,.04);border-radius:5px;padding:8px 10px;text-align:center"><div style="font-size:18px;font-weight:700;color:#ff8d72">' + esc(pos) + '</div><div style="font-size:10px;color:#7a8499;margin-top:3px;text-transform:uppercase">' + esc( i18n.isAvgPosition ) + '</div></div>'
-				+ '</div>'
-				+ '<div style="font-size:10px;color:#7a8499;margin-top:6px">' + esc( i18n.isUpdated ) + ' ' + esc( row.sa_updated ) + ' UTC</div>'
-				+ '</div>';
-		}
-
+		// ── Rich Results ──────────────────────────────────────────────────────────
 		if ( rr ) {
-			html += '<div style="grid-column:1/-1"><span style="color:#7a8499;font-weight:600">' + esc( i18n.isRichResults ) + '</span>' + rr + '</div>';
+			html += sHead( esc( i18n.isRichResults ) );
+			html += rr;
+		}
+
+		// ── Search Analytics ──────────────────────────────────────────────────────
+		if ( row.sa_updated ) {
+			var ctr    = row.sa_ctr         != null ? ( parseFloat( row.sa_ctr )         * 100 ).toFixed( 1 ) + '%' : '\u2014';
+			var pos    = row.sa_position    != null ? parseFloat( row.sa_position    ).toFixed( 1 )                  : '\u2014';
+			var clicks = row.sa_clicks      != null ? parseInt( row.sa_clicks,      10 )                             : '\u2014';
+			var impr   = row.sa_impressions != null ? parseInt( row.sa_impressions,  10 )                            : '\u2014';
+			html += sHead( esc( i18n.isSearchAnalytics ) );
+			html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">'
+				+ '<div style="background:rgba(255,255,255,.04);border-radius:5px;padding:8px 10px;text-align:center"><div style="font-size:18px;font-weight:700;color:#1d8cf8">' + esc( String( clicks ) ) + '</div><div style="font-size:10px;color:#7a8499;margin-top:3px;text-transform:uppercase">' + esc( i18n.isClicks ) + '</div></div>'
+				+ '<div style="background:rgba(255,255,255,.04);border-radius:5px;padding:8px 10px;text-align:center"><div style="font-size:18px;font-weight:700;color:#c8d0e0">' + esc( String( impr ) ) + '</div><div style="font-size:10px;color:#7a8499;margin-top:3px;text-transform:uppercase">' + esc( i18n.isImpressions ) + '</div></div>'
+				+ '<div style="background:rgba(255,255,255,.04);border-radius:5px;padding:8px 10px;text-align:center"><div style="font-size:18px;font-weight:700;color:#00f2c3">' + esc( ctr ) + '</div><div style="font-size:10px;color:#7a8499;margin-top:3px;text-transform:uppercase">' + esc( i18n.isCtr ) + '</div></div>'
+				+ '<div style="background:rgba(255,255,255,.04);border-radius:5px;padding:8px 10px;text-align:center"><div style="font-size:18px;font-weight:700;color:#ff8d72">' + esc( pos ) + '</div><div style="font-size:10px;color:#7a8499;margin-top:3px;text-transform:uppercase">' + esc( i18n.isAvgPosition ) + '</div></div>'
+				+ '</div>'
+				+ '<div style="font-size:10px;color:#7a8499;margin-top:6px">' + esc( i18n.isUpdated ) + ' ' + esc( row.sa_updated ) + ' UTC</div>';
 		}
 
 		// ── Live inspect extras (present only after an on-demand Inspect call) ──
@@ -191,19 +256,15 @@
 			// Mobile Usability.
 			var mv = extra.mobile && extra.mobile.verdict ? extra.mobile.verdict : '';
 			if ( mv && 'VERDICT_UNSPECIFIED' !== mv ) {
-				var mvBadge = 'PASS' === mv
-					? '<span style="color:#00f2c3;font-weight:600">\u2713 Pass</span>'
-					: 'FAIL' === mv
-						? '<span style="color:#fd5d93;font-weight:600">\u2717 Fail</span>'
-						: '<span style="color:#ff8d72;font-weight:600">\u26a0 ' + esc( fmtState( mv ) ) + '</span>';
-				html += '<div style="grid-column:1/-1;margin-top:4px;padding-top:8px;border-top:1px solid rgba(45,53,85,.6)">'
-					+ '<span style="color:#7a8499;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px">' + esc( i18n.isMobileUsability ) + '</span>'
-					+ ' ' + mvBadge;
+				html += sHead( esc( i18n.isMobileUsability ) );
+				html += grid2
+					+ '<span style="color:#7a8499">' + esc( i18n.isMobileUsability ) + ':</span>'
+					+ yesNo( 'PASS' === mv )
+					+ '</div>';
 				( extra.mobile.issues || [] ).forEach( function( iss ) {
 					var col = 'ERROR' === iss.severity ? '#fd5d93' : '#ff8d72';
 					html += '<div style="font-size:11px;color:' + col + ';margin-top:4px">\u26a0 ' + esc( iss.message || iss.type ) + '</div>';
 				} );
-				html += '</div>';
 			}
 
 			// AMP.
@@ -214,35 +275,35 @@
 					: 'FAIL' === av
 						? '<span style="color:#fd5d93;font-weight:600">\u2717 Fail</span>'
 						: '<span style="color:#ff8d72;font-weight:600">\u26a0 ' + esc( fmtState( av ) ) + '</span>';
-				html += '<div style="grid-column:1/-1;margin-top:4px;padding-top:8px;border-top:1px solid rgba(45,53,85,.6)">'
-					+ '<span style="color:#7a8499;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px">' + esc( i18n.isAmp ) + '</span>'
-					+ ' ' + avBadge;
+				html += sHead( esc( i18n.isAmp ) );
+				html += '<div>' + avBadge;
 				if ( extra.amp.url ) {
 					html += ' <a href="' + esc( extra.amp.url ) + '" target="_blank" rel="noopener noreferrer" style="color:#6ab0f5;font-size:11px">' + esc( extra.amp.url ) + '</a>';
 				}
+				html += '</div>';
 				( extra.amp.issues || [] ).forEach( function( iss ) {
 					var col = 'ERROR' === iss.severity ? '#fd5d93' : '#ff8d72';
 					html += '<div style="font-size:11px;color:' + col + ';margin-top:4px">\u26a0 ' + esc( iss.message ) + '</div>';
 				} );
-				html += '</div>';
 			}
 
 			// Sitemaps.
 			if ( extra.sitemap && extra.sitemap.length ) {
-				html += '<div style="grid-column:1/-1"><span style="color:#7a8499">' + esc( i18n.isSitemaps ) + ':</span> <span style="color:#c8d0e0;font-size:11px">'
+				html += '<div style="margin-top:6px"><span style="color:#7a8499">' + esc( i18n.isSitemaps ) + ':</span> <span style="color:#c8d0e0;font-size:11px">'
 					+ extra.sitemap.map( function( s ) { return esc( s ); } ).join( ', ' )
 					+ '</span></div>';
 			}
 
-			// View in Search Console link.
+			// View in Search Console.
 			if ( extra.inspect_link ) {
-				html += '<div style="grid-column:1/-1;margin-top:4px">'
+				html += '<div style="margin-top:8px">'
 					+ '<a href="' + esc( extra.inspect_link ) + '" target="_blank" rel="noopener noreferrer" style="color:#6ab0f5;font-size:12px">'
 					+ esc( i18n.isViewInGsc ) + '</a></div>';
 			}
 		}
 
-		html += '<div style="grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">'
+		// ── Buttons ───────────────────────────────────────────────────────────────
+		html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">'
 			+ '<button type="button" class="button button-small dc-gi-is-inspect-detail-btn" data-url="' + esc( row.url ) + '">' + esc( i18n.isInspect ) + '</button>';
 		if ( 'PASS' !== row.index_verdict ) {
 			html += '<button type="button" class="button button-small dc-gi-is-resubmit-btn" data-url="' + esc( row.url ) + '">' + esc( i18n.isResubmit ) + '</button>';
