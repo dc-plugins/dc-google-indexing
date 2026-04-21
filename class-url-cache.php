@@ -82,6 +82,7 @@ class DC_GI_URL_Cache {
 			user_canonical   VARCHAR(600)  NOT NULL DEFAULT '',
 			crawled_as       VARCHAR(20)   NOT NULL DEFAULT '',
 			rich_results     TEXT          NOT NULL,
+			referring_urls   TEXT          NOT NULL DEFAULT '',
 			last_inspected   DATETIME      NOT NULL,
 			last_submitted   DATETIME      NULL DEFAULT NULL,
 			sa_clicks        INT           NOT NULL DEFAULT 0,
@@ -119,6 +120,7 @@ class DC_GI_URL_Cache {
 			'user_canonical'   => "VARCHAR(600) NOT NULL DEFAULT ''",
 			'crawled_as'       => "VARCHAR(20) NOT NULL DEFAULT ''",
 			'rich_results'     => 'TEXT NOT NULL',
+			'referring_urls'   => "TEXT NOT NULL DEFAULT ''",
 			'sa_clicks'        => 'INT NOT NULL DEFAULT 0',
 			'sa_impressions'   => 'INT NOT NULL DEFAULT 0',
 			'sa_ctr'           => 'FLOAT NOT NULL DEFAULT 0',
@@ -272,7 +274,7 @@ class DC_GI_URL_Cache {
 				"SELECT url, index_verdict, coverage_state, page_fetch_state,
 				        robots_txt_state, indexing_state, last_crawl_time,
 				        google_canonical, user_canonical, crawled_as, rich_results,
-				        last_inspected, last_submitted,
+				        referring_urls, last_inspected, last_submitted,
 				        sa_clicks, sa_impressions, sa_ctr, sa_position, sa_updated
 				 FROM `{$wpdb->prefix}dc_gi_url_cache` WHERE url = %s LIMIT 1",
 				$url
@@ -335,8 +337,8 @@ class DC_GI_URL_Cache {
 				(url, index_verdict, coverage_state, page_fetch_state,
 				 robots_txt_state, indexing_state, last_crawl_time,
 				 google_canonical, user_canonical, crawled_as, rich_results,
-				 last_inspected)
-			 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+				 referring_urls, last_inspected)
+			 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 			 ON DUPLICATE KEY UPDATE
 				index_verdict    = VALUES(index_verdict),
 				coverage_state   = VALUES(coverage_state),
@@ -348,6 +350,7 @@ class DC_GI_URL_Cache {
 				user_canonical   = VALUES(user_canonical),
 				crawled_as       = VALUES(crawled_as),
 				rich_results     = VALUES(rich_results),
+				referring_urls   = VALUES(referring_urls),
 				last_inspected   = VALUES(last_inspected)",
 				$url,
 				(string) ( $fields['index_verdict'] ?? '' ),
@@ -360,6 +363,7 @@ class DC_GI_URL_Cache {
 				(string) ( $fields['user_canonical'] ?? '' ),
 				(string) ( $fields['crawled_as'] ?? '' ),
 				(string) ( $fields['rich_results'] ?? '' ),
+				(string) ( $fields['referring_urls'] ?? '' ),
 				$now
 			)
 		);
@@ -659,6 +663,9 @@ class DC_GI_URL_Cache {
 			$rich_encoded = $json ? (string) $json : '';
 		}
 
+		$ref_json = wp_json_encode(
+			array_values( array_filter( (array) ( $isr['referringUrls'] ?? array() ) ) )
+		);
 		return array(
 			'index_verdict'    => $index_verdict,
 			'coverage_state'   => $coverage_state,
@@ -670,6 +677,7 @@ class DC_GI_URL_Cache {
 			'user_canonical'   => (string) ( $isr['userCanonical'] ?? '' ),
 			'crawled_as'       => (string) ( $isr['crawledAs'] ?? '' ),
 			'rich_results'     => $rich_encoded,
+			'referring_urls'   => $ref_json ? (string) $ref_json : '',
 		);
 	}
 

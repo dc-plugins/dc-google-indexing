@@ -206,6 +206,7 @@ function dc_gi_enqueue_scripts( string $hook ): void {
 				'isYes'                      => __( 'Yes', 'dc-google-indexing' ),
 				'isNo'                       => __( 'No', 'dc-google-indexing' ),
 				'isCanonicalPending'         => __( 'To be determined after indexing', 'dc-google-indexing' ),
+				'isReferringUrls'            => __( 'Referring URLs', 'dc-google-indexing' ),
 			),
 		)
 	);
@@ -1371,10 +1372,11 @@ function dc_gi_ajax_is_inspect_now(): void {
 
 	wp_send_json_success(
 		array(
-			'row'          => DC_GI_URL_Cache::get_entry( $url ),
-			'inspect_link' => $result['inspectionResultLink'] ?? '',
-			'sitemap'      => array_values( array_filter( (array) ( $isr['sitemap'] ?? array() ) ) ),
-			'mobile'       => array(
+			'row'            => DC_GI_URL_Cache::get_entry( $url ),
+			'inspect_link'   => $result['inspectionResultLink'] ?? '',
+			'referring_urls' => array_values( array_filter( (array) ( $isr['referringUrls'] ?? array() ) ) ),
+			'sitemap'        => array_values( array_filter( (array) ( $isr['sitemap'] ?? array() ) ) ),
+			'mobile'         => array(
 				'verdict' => (string) ( $mobile_raw['verdict'] ?? '' ),
 				'issues'  => array_map(
 					fn( $iss ) => array(
@@ -1385,7 +1387,7 @@ function dc_gi_ajax_is_inspect_now(): void {
 					(array) ( $mobile_raw['issues'] ?? array() )
 				),
 			),
-			'amp'          => array(
+			'amp'            => array(
 				'verdict' => (string) ( $amp_raw['verdict'] ?? '' ),
 				'url'     => (string) ( $amp_raw['ampUrl'] ?? '' ),
 				'issues'  => array_map(
@@ -3370,12 +3372,13 @@ function dc_gi_render_page(): void {
 						<th style="width:120px;color:#c8d0e0;cursor:pointer" data-col="last_inspected">
 							<?php esc_html_e( 'Inspected', 'dc-google-indexing' ); ?> <span class="dc-gi-sort-icon" data-col="last_inspected"></span>
 						</th>
+						<th style="width:160px;color:#c8d0e0"><?php esc_html_e( 'Rich Results', 'dc-google-indexing' ); ?></th>
 						<th style="width:40px;color:#7a8499"></th>
 						<th style="width:32px;color:#7a8499"></th>
 					</tr>
 				</thead>
 				<tbody id="dc-gi-is-url-tbody">
-					<tr><td colspan="8" style="text-align:center;color:#7a8499;padding:24px"><?php esc_html_e( 'Loading…', 'dc-google-indexing' ); ?></td></tr>
+					<tr><td colspan="9" style="text-align:center;color:#7a8499;padding:24px"><?php esc_html_e( 'Loading…', 'dc-google-indexing' ); ?></td></tr>
 				</tbody>
 			</table>
 		</div>

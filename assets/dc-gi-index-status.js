@@ -80,7 +80,7 @@
 		if ( order   ) { isOrder   = order; }
 		updateCsvHref();
 		var tbody = document.getElementById( 'dc-gi-is-url-tbody' );
-		if ( tbody ) { tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#7a8499;padding:24px">' + esc( i18n.isLoading ) + '</td></tr>'; }
+		if ( tbody ) { tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#7a8499;padding:24px">' + esc( i18n.isLoading ) + '</td></tr>'; }
 		updateSortIcons();
 		jQuery.post( ajaxUrl, {
 			action:          'dc_gi_is_urls',
@@ -103,45 +103,81 @@
 
 	function buildRichResults( jsonStr ) {
 		if ( ! jsonStr ) { return ''; }
-		var items;
-		try { items = JSON.parse( jsonStr ); } catch(e) { return ''; }
-		if ( ! items || ! items.length ) { return ''; }
-		var html = '';
-		items.forEach( function( rtype ) {
-			var hasError   = false;
-			var hasWarning = false;
-			var flatIssues = [];
-			( rtype.i || [] ).forEach( function( item ) {
+		var types;
+		try { types = JSON.parse( jsonStr ); } catch(e) { return ''; }
+		if ( ! types || ! types.length ) { return ''; }
+
+		var html = '<table style="width:100%;border-collapse:collapse;font-size:12px">'
+			+ '<tr style="background:rgba(45,53,85,.6)">'
+			+ '<th style="text-align:left;padding:4px 8px;color:#7a8499;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.5px;width:28%">Rich Result Type</th>'
+			+ '<th style="text-align:left;padding:4px 8px;color:#7a8499;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.5px">Items</th>'
+			+ '</tr>';
+
+		types.forEach( function( rtype ) {
+			var hasError = ( rtype.i || [] ).some( function( item ) {
+				return ( item.i || [] ).some( function( iss ) { return 'ERROR' === iss.s; } );
+			} );
+			var hasWarn = ! hasError && ( rtype.i || [] ).some( function( item ) {
+				return ( item.i || [] ).some( function( iss ) { return 'WARNING' === iss.s; } );
+			} );
+			var typeColor = hasError ? '#fd5d93' : hasWarn ? '#ff8d72' : '#00f2c3';
+			var typeIcon  = hasError ? '\u2717' : hasWarn ? '\u26a0' : '\u2713';
+			var items     = rtype.i || [];
+			var rowspan   = items.length || 1;
+
+			if ( ! items.length ) {
+				html += '<tr style="border-top:1px solid rgba(45,53,85,.4)">'
+					+ '<td style="padding:5px 8px;vertical-align:top;color:' + typeColor + ';font-weight:600" rowspan="1">'
+					+ typeIcon + ' ' + esc( rtype.t || '' ) + '</td>'
+					+ '<td style="padding:5px 8px;color:#7a8499">\u2014</td>'
+					+ '</tr>';
+				return;
+			}
+
+			items.forEach( function( item, idx ) {
+				var itemName    = item.n ? esc( item.n ) : '<span style="color:#7a8499;font-style:italic">(unnamed)</span>';
+				var issueHtml   = '';
 				( item.i || [] ).forEach( function( iss ) {
-					if ( 'ERROR'   === iss.s ) { hasError   = true; }
-					if ( 'WARNING' === iss.s ) { hasWarning = true; }
-					flatIssues.push( { m: iss.m, s: iss.s, n: item.n } );
+					var issCol = 'ERROR' === iss.s ? '#fd5d93' : '#ff8d72';
+					issueHtml += '<div style="font-size:11px;color:' + issCol + ';margin-top:2px;padding-left:10px">\u26a0 ' + esc( iss.m ) + '</div>';
 				} );
+
+				var border = 'border-top:1px solid rgba(45,53,85,.4)';
+				if ( 0 === idx ) {
+					html += '<tr style="' + border + '">'
+						+ '<td style="padding:5px 8px;vertical-align:top;color:' + typeColor + ';font-weight:600" rowspan="' + rowspan + '">'
+						+ typeIcon + ' ' + esc( rtype.t || '' ) + '</td>';
+				} else {
+					html += '<tr style="border-top:1px dashed rgba(45,53,85,.3)">';
+				}
+				html += '<td style="padding:5px 8px;vertical-align:top">'
+					+ '<span style="color:#c8d0e0;font-weight:600">' + itemName + '</span>'
+					+ issueHtml + '</td></tr>';
 			} );
-			var validCount = ( rtype.i || [] ).filter( function( item ) {
-				return ! ( item.i || [] ).some( function( iss ) { return 'ERROR' === iss.s; } );
-			} ).length;
-			var iconColor = hasError ? '#fd5d93' : '#00f2c3';
-			var icon      = hasError ? '\u2717' : '\u2713';
-			html += '<div style="display:flex;align-items:flex-start;gap:8px;padding:5px 0;border-bottom:1px solid rgba(45,53,85,.3)">'
-				+ '<span style="color:' + iconColor + ';font-weight:700;font-size:13px;line-height:1.4">' + icon + '</span>'
-				+ '<div style="flex:1">'
-				+ '<span style="color:#c8d0e0;font-weight:600;font-size:12px">' + esc( rtype.t || '' ) + '</span>';
-			if ( validCount > 0 ) {
-				html += ' <span style="color:#7a8499;font-size:11px">\u2014 ' + validCount + ' valid</span>';
-			}
-			if ( hasWarning && ! hasError ) {
-				html += ' <span style="color:#ff8d72;font-size:11px">\u26a0 non-critical issues</span>';
-			}
-			flatIssues.forEach( function( iss ) {
-				var col = 'ERROR' === iss.s ? '#fd5d93' : '#ff8d72';
-				html += '<div style="font-size:11px;color:' + col + ';margin-top:3px">\u26a0 ';
-				if ( iss.n ) { html += '<span style="color:#7a8499">' + esc( iss.n ) + ':</span> '; }
-				html += esc( iss.m ) + '</div>';
-			} );
-			html += '</div></div>';
 		} );
+
+		html += '</table>';
 		return html;
+	}
+
+	function buildRichBadges( jsonStr ) {
+		if ( ! jsonStr ) { return ''; }
+		var types;
+		try { types = JSON.parse( jsonStr ); } catch(e) { return ''; }
+		if ( ! types || ! types.length ) { return ''; }
+		return types.map( function( rtype ) {
+			var hasError = ( rtype.i || [] ).some( function( item ) {
+				return ( item.i || [] ).some( function( iss ) { return 'ERROR' === iss.s; } );
+			} );
+			var hasWarn = ! hasError && ( rtype.i || [] ).some( function( item ) {
+				return ( item.i || [] ).some( function( iss ) { return 'WARNING' === iss.s; } );
+			} );
+			var col = hasError ? '#fd5d93' : hasWarn ? '#ff8d72' : '#00f2c3';
+			var bg  = hasError ? 'rgba(253,93,147,.12)' : hasWarn ? 'rgba(255,141,114,.12)' : 'rgba(0,242,195,.12)';
+			return '<span style="display:inline-block;background:' + bg + ';color:' + col
+				+ ';border-radius:3px;padding:1px 5px;margin:1px 2px;font-size:10px;white-space:nowrap">'
+				+ esc( rtype.t || '' ) + '</span>';
+		} ).join( '' );
 	}
 
 	function buildDetailRow( row, offset, i, extra ) {
@@ -164,7 +200,7 @@
 		var grid2 = '<div style="display:grid;grid-template-columns:minmax(160px,auto) 1fr;gap:5px 16px;align-items:baseline">';
 
 		var html = '<tr class="dc-gi-is-detail-row" data-idx="' + (offset+i) + '" style="display:none">'
-			+ '<td colspan="8" style="background:#111827;padding:0 0 0 48px;border-top:none">'
+			+ '<td colspan="9" style="background:#111827;padding:0 0 0 48px;border-top:none">'
 			+ '<div style="padding:12px 16px 12px 0;font-size:12px;max-width:900px">';
 
 		// ── Coverage ─────────────────────────────────────────────────────────────
@@ -186,8 +222,11 @@
 					+ '<span style="color:#c8d0e0">' + esc( fmtDate( row.last_crawl_time ) ) + '</span>';
 			}
 			if ( caKnown ) {
+				var caIcon = row.crawled_as === 'MOBILE'  ? '\uD83D\uDCF1 '
+					: row.crawled_as === 'DESKTOP' ? '\uD83D\uDDA5 '
+					: '';
 				html += '<span style="color:#7a8499">' + esc( i18n.isCrawledAs ) + ':</span>'
-					+ '<span style="color:#c8d0e0">' + esc( fmtState( row.crawled_as ) ) + '</span>';
+					+ '<span style="color:#c8d0e0">' + caIcon + esc( fmtState( row.crawled_as ) ) + '</span>';
 			}
 			if ( rtsKnown ) {
 				html += '<span style="color:#7a8499">' + esc( i18n.isCrawlAllowed ) + ':</span>'
@@ -224,6 +263,22 @@
 				html += '<span style="color:#7a8499;font-style:italic;font-size:11px">' + esc( i18n.isCanonicalPending ) + '</span>';
 			}
 			html += '</div>';
+		}
+
+		// ── Referring URLs ────────────────────────────────────────────────────────
+		var refUrls = [];
+		try { refUrls = JSON.parse( row.referring_urls || '[]' ); } catch(e) {}
+		if ( ! refUrls.length && extra && extra.referring_urls && extra.referring_urls.length ) {
+			refUrls = extra.referring_urls;
+		}
+		if ( refUrls.length ) {
+			html += sHead( esc( i18n.isReferringUrls ) );
+			html += '<ul style="margin:4px 0;padding-left:16px">';
+			refUrls.forEach( function( u ) {
+				html += '<li><a href="' + esc( u ) + '" target="_blank" rel="noopener noreferrer"'
+					+ ' style="color:#6ab0f5;font-size:11px">' + esc( u ) + '</a></li>';
+			} );
+			html += '</ul>';
 		}
 
 		// ── Last submitted ────────────────────────────────────────────────────────
@@ -430,6 +485,7 @@
 					cells[ 3 ].title       = freshRow.coverage_state || '';
 				}
 				if ( cells[ 5 ] ) { cells[ 5 ].textContent = fmtDate( freshRow.last_inspected ); }
+				if ( cells[ 8 ] ) { cells[ 8 ].innerHTML = buildRichBadges( freshRow.rich_results || '' ); }
 			}
 
 			// Re-wire interactive buttons in the newly inserted detail row.
@@ -462,7 +518,7 @@
 		if ( ! tbody ) { return; }
 		var offset = ( page - 1 ) * 25;
 		if ( ! rows || ! rows.length ) {
-			tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#7a8499;padding:24px">' + esc( i18n.isNoUrlsMatch ) + '</td></tr>';
+			tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#7a8499;padding:24px">' + esc( i18n.isNoUrlsMatch ) + '</td></tr>';
 		} else {
 			var html = '';
 			for ( var i = 0; i < rows.length; i++ ) {
@@ -483,6 +539,7 @@
 					+ ' data-url="' + esc( url ) + '" title="' + esc( i18n.isInspectNow ) + '"'
 					+ ' style="padding:2px 5px;font-size:12px;line-height:1.4;min-height:0">\u21BB</button>'
 					+ '</td>';
+				html += '<td style="font-size:11px;vertical-align:middle">' + buildRichBadges( row.rich_results || '' ) + '</td>';
 				html += '</tr>';
 				html += buildDetailRow( row, offset, i );
 			}
