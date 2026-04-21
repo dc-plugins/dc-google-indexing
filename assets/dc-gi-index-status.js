@@ -8,6 +8,14 @@
 	// Guard: only run on the Index Status tab.
 	if ( ! document.getElementById( 'dc-gi-is-url-tbody' ) ) { return; }
 
+	// Inject spinner keyframes once.
+	(function() {
+		var style = document.createElement( 'style' );
+		style.textContent = '@keyframes dc-gi-spin{to{transform:rotate(360deg)}}'
+			+ '.dc-gi-spin{display:inline-block;width:10px;height:10px;border:2px solid rgba(200,208,224,.25);border-top-color:#c8d0e0;border-radius:50%;animation:dc-gi-spin .6s linear infinite;vertical-align:middle}';
+		document.head.appendChild( style );
+	}());
+
 	var nonce          = dcGiPoll.nonce;
 	var ajaxUrl        = dcGiPoll.ajaxurl;
 	var i18n           = dcGiPoll.i18n;
@@ -455,9 +463,9 @@
 	// Called by both the ↻ column button and the "Inspect" button inside the accordion.
 
 	function doInspectNow( url, dataRow, detailRow, tbody, triggerBtn ) {
-		var origText           = triggerBtn.textContent;
-		triggerBtn.disabled    = true;
-		triggerBtn.textContent = i18n.isInspecting;
+		var origText        = triggerBtn.textContent;
+		triggerBtn.disabled = true;
+		triggerBtn.innerHTML = '<span class="dc-gi-spin"></span>';
 		jQuery.post( ajaxUrl, { action: 'dc_gi_is_inspect_now', nonce: nonce, url: url },
 		function( resp ) {
 			triggerBtn.disabled    = false;
