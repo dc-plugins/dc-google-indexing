@@ -13,7 +13,7 @@
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain: dc-google-indexing
  * Requires at least: 6.8
- * Requires PHP:      7.4
+ * Requires PHP:      8.0
  * @package dc-google-indexing
  */
 
@@ -350,7 +350,7 @@ function dc_gi_process_queue(): void {
  * @param string         $type   Notification type (URL_UPDATED or URL_DELETED).
  * @param array|WP_Error $result API response or WP_Error on failure.
  */
-function dc_gi_add_log( string $url, string $type, $result ): void {
+function dc_gi_add_log( string $url, string $type, array|WP_Error $result ): void {
 	dc_gi_push_log_entry(
 		array(
 			'url'    => $url,
@@ -839,7 +839,7 @@ function dc_gi_is_quota_exhausted(): bool {
  * @param array|null $settings Pre-loaded settings array, or null to load from DB.
  * @return array|WP_Error Decoded service account array or WP_Error on failure.
  */
-function dc_gi_get_validated_sa( ?array $settings = null ) {
+function dc_gi_get_validated_sa( ?array $settings = null ): array|WP_Error {
 	if ( null === $settings ) {
 		$settings = dc_gi_get_settings();
 	}

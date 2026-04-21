@@ -83,6 +83,7 @@ add_action( 'wp_ajax_dc_gi_is_inspect_now', 'dc_gi_ajax_is_inspect_now' );
 add_action( 'wp_ajax_dc_gi_is_bulk_resubmit', 'dc_gi_ajax_is_bulk_resubmit' );
 add_action( 'admin_post_dc_gi_is_export_csv', 'dc_gi_handle_is_export_csv' );
 add_action( 'admin_enqueue_scripts', 'dc_gi_enqueue_scripts' );
+add_action( 'admin_init', 'dc_gi_register_settings' );
 /**
  * Enqueue admin scripts and localized data for the plugin's admin page.
  *
@@ -233,6 +234,71 @@ function dc_gi_quota_exhausted_notice(): void {
 }
 
 
+
+/**
+ * Register the dc_gi_settings option with the WordPress Settings API.
+ * Attaches a sanitize_callback so WordPress validates the data on every
+ * save path, including any future REST-based tooling.
+ */
+function dc_gi_register_settings(): void {
+	register_setting(
+		'dc_gi_settings_group',
+		'dc_gi_settings',
+		array(
+			'sanitize_callback' => 'dc_gi_sanitize_settings',
+			'default'           => array(),
+		)
+	);
+}
+
+/**
+ * Sanitize the dc_gi_settings option value.
+ *
+ * Mirrors the validation logic in dc_gi_handle_save() without side effects
+ * (no redirects, no transient/option deletions). Those cache-busting
+ * operations remain the responsibility of the explicit save handler.
+ *
+ * @param mixed $input Raw input value, expected to be an associative array.
+ * @return array Sanitized settings array.
+ */
+function dc_gi_sanitize_settings( mixed $input ): array {
+	if ( ! is_array( $input ) ) {
+		return dc_gi_get_settings();
+	}
+
+	$old      = dc_gi_get_settings();
+	$raw_json = sanitize_textarea_field( wp_unslash( (string) ( $input['service_account_json'] ?? '' ) ) );
+
+	if ( ! empty( $raw_json ) ) {
+		$parsed = json_decode( $raw_json, true );
+		if ( ! $parsed || empty( $parsed['client_email'] ) || empty( $parsed['private_key'] ) ) {
+			add_settings_error(
+				'dc_gi_settings',
+				'invalid_json',
+				__( 'Invalid service account JSON — must contain client_email and private_key.', 'dc-google-indexing' )
+			);
+			$raw_json = $old['service_account_json'] ?? '';
+		}
+	} else {
+		$raw_json = $old['service_account_json'] ?? '';
+	}
+
+	$post_types = isset( $input['post_types'] ) && is_array( $input['post_types'] )
+		? array_map( 'sanitize_key', wp_unslash( $input['post_types'] ) )
+		: array();
+
+	return array(
+		'service_account_json'    => $raw_json,
+		'search_console_property' => dc_gi_normalize_search_console_property(
+			sanitize_text_field( wp_unslash( (string) ( $input['search_console_property'] ?? '' ) ) )
+		),
+		'auto_submit'             => ! empty( $input['auto_submit'] ) ? 1 : 0,
+		'auto_delete'             => ! empty( $input['auto_delete'] ) ? 1 : 0,
+		'post_types'              => $post_types,
+		'daily_quota'             => min( 200, max( 1, absint( $input['daily_quota'] ?? 200 ) ) ),
+		'analytics_days'          => min( 90, max( 1, absint( $input['analytics_days'] ?? 28 ) ) ),
+	);
+}
 
 /**
  * Handle the settings save form submission.
@@ -1573,8 +1639,8 @@ function dc_gi_render_page(): void {
 	// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 	$queued_count = absint( isset( $_GET['count'] ) ? wp_unslash( $_GET['count'] ) : 0 );
 	// phpcs:ignore WordPress.Security.NonceVerification.Recommended
-	$qa_results    = (array) get_option( 'dc_gi_qa_results', array() );
-	$qa_pending    = (array) get_option( 'dc_gi_qa_pending', array() );
+	$qa_results = (array) get_option( 'dc_gi_qa_results', array() );
+	$qa_pending = (array) get_option( 'dc_gi_qa_pending', array() );
 
 	$notices = array(
 		'saved'                 => array( 'success', __( 'Settings saved.', 'dc-google-indexing' ) ),
