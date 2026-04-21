@@ -174,29 +174,33 @@
 		}
 
 		// ── Crawl ─────────────────────────────────────────────────────────────────
-		if ( row.last_crawl_time || row.crawled_as || rts || row.page_fetch_state || idx ) {
+		var rtsKnown = rts && 'ROBOTS_TXT_STATE_UNSPECIFIED'   !== rts;
+		var pfKnown  = row.page_fetch_state  && 'PAGE_FETCH_STATE_UNSPECIFIED'  !== row.page_fetch_state;
+		var idxKnown = idx && 'INDEXING_STATE_UNSPECIFIED'     !== idx;
+		var caKnown  = row.crawled_as && 'CRAWLING_USER_AGENT_UNSPECIFIED' !== row.crawled_as;
+		if ( row.last_crawl_time || caKnown || rtsKnown || pfKnown || idxKnown ) {
 			html += sHead( esc( i18n.isCrawl ), ! row.coverage_state );
 			html += grid2;
 			if ( row.last_crawl_time ) {
 				html += '<span style="color:#7a8499">' + esc( i18n.isCrawlTime ) + ':</span>'
 					+ '<span style="color:#c8d0e0">' + esc( fmtDate( row.last_crawl_time ) ) + '</span>';
 			}
-			if ( row.crawled_as ) {
+			if ( caKnown ) {
 				html += '<span style="color:#7a8499">' + esc( i18n.isCrawledAs ) + ':</span>'
 					+ '<span style="color:#c8d0e0">' + esc( fmtState( row.crawled_as ) ) + '</span>';
 			}
-			if ( rts ) {
+			if ( rtsKnown ) {
 				html += '<span style="color:#7a8499">' + esc( i18n.isCrawlAllowed ) + ':</span>'
 					+ yesNo( 'ALLOWED' === rts );
 			}
-			if ( row.page_fetch_state ) {
+			if ( pfKnown ) {
 				var pfOk = 'SUCCESSFUL' === row.page_fetch_state;
 				html += '<span style="color:#7a8499">' + esc( i18n.isPageFetch ) + ':</span>'
 					+ ( pfOk
 						? '<span style="color:#00f2c3;font-weight:600">\u2713 ' + esc( fmtState( row.page_fetch_state ) ) + '</span>'
 						: '<span style="color:#fd5d93">' + esc( fmtState( row.page_fetch_state ) ) + '</span>' );
 			}
-			if ( idx ) {
+			if ( idxKnown ) {
 				html += '<span style="color:#7a8499">' + esc( i18n.isIndexingAllowed ) + ':</span>'
 					+ yesNo( 'INDEXING_ALLOWED' === idx );
 			}
