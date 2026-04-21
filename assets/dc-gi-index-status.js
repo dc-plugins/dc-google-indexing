@@ -204,9 +204,16 @@
 			+ '<div style="padding:12px 16px 12px 0;font-size:12px;max-width:900px">';
 
 		// ── Coverage ─────────────────────────────────────────────────────────────
+		html += sHead( esc( i18n.isCoverage ), true );
+		if ( row.index_verdict ) {
+			var vBadge = verdictBadge[ row.index_verdict ]
+				|| '<span style="color:#7a8499;font-weight:600">' + esc( row.index_verdict ) + '</span>';
+			html += grid2
+				+ '<span style="color:#7a8499">Verdict:</span>' + vBadge
+				+ '</div>';
+		}
 		if ( row.coverage_state ) {
-			html += sHead( esc( i18n.isCoverage ), true );
-			html += '<div style="color:#c8d0e0">' + esc( row.coverage_state ) + '</div>';
+			html += '<div style="color:#c8d0e0;margin-top:3px">' + esc( row.coverage_state ) + '</div>';
 		}
 
 		// ── Crawl ─────────────────────────────────────────────────────────────────
@@ -215,7 +222,7 @@
 		var idxKnown = idx && 'INDEXING_STATE_UNSPECIFIED'     !== idx;
 		var caKnown  = row.crawled_as && 'CRAWLING_USER_AGENT_UNSPECIFIED' !== row.crawled_as;
 		if ( row.last_crawl_time || caKnown || rtsKnown || pfKnown || idxKnown ) {
-			html += sHead( esc( i18n.isCrawl ), ! row.coverage_state );
+			html += sHead( esc( i18n.isCrawl ) );
 			html += grid2;
 			if ( row.last_crawl_time ) {
 				html += '<span style="color:#7a8499">' + esc( i18n.isCrawlTime ) + ':</span>'
@@ -289,9 +296,11 @@
 		}
 
 		// ── Rich Results ──────────────────────────────────────────────────────────
+		html += sHead( esc( i18n.isRichResults ) );
 		if ( rr ) {
-			html += sHead( esc( i18n.isRichResults ) );
 			html += rr;
+		} else {
+			html += '<div style="color:#7a8499;font-style:italic;font-size:12px">No rich results detected</div>';
 		}
 
 		// ── Search Analytics ──────────────────────────────────────────────────────
