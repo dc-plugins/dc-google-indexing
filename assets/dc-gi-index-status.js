@@ -502,7 +502,7 @@
 					cells[ 3 ].title       = freshRow.coverage_state || '';
 				}
 				if ( cells[ 5 ] ) { cells[ 5 ].textContent = fmtDate( freshRow.last_inspected ); }
-				if ( cells[ 8 ] ) { cells[ 8 ].innerHTML = buildRichBadges( freshRow.rich_results || '' ); }
+				if ( cells[ 6 ] ) { cells[ 6 ].innerHTML = buildRichBadges( freshRow.rich_results || '' ); }
 			}
 
 			// Re-wire interactive buttons in the newly inserted detail row.
@@ -550,13 +550,13 @@
 				html += '<td style="font-size:12px;color:#c8d0e0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc( row.coverage_state ) + '">' + esc( row.coverage_state || '\u2014' ) + '</td>';
 				html += '<td style="font-size:12px;color:#7a8499">' + esc( fmtDate( row.last_crawl_time ) ) + '</td>';
 				html += '<td style="font-size:12px;color:#7a8499">' + esc( fmtDate( row.last_inspected ) ) + '</td>';
+				html += '<td style="font-size:11px;vertical-align:middle;max-width:160px;overflow:hidden">' + buildRichBadges( row.rich_results || '' ) + '</td>';
 				html += '<td style="font-size:12px;color:#7a8499;text-align:center"><span class="dc-gi-is-expand-icon" style="cursor:pointer;font-size:14px" title="' + esc( i18n.isShowDetails ) + '">\u2304</span></td>';
 				html += '<td style="font-size:12px;text-align:center">'
 					+ '<button type="button" class="button button-small dc-gi-is-inspect-btn"'
 					+ ' data-url="' + esc( url ) + '" title="' + esc( i18n.isInspectNow ) + '"'
 					+ ' style="padding:2px 5px;font-size:12px;line-height:1.4;min-height:0">\u21BB</button>'
 					+ '</td>';
-				html += '<td style="font-size:11px;vertical-align:middle;max-width:160px;overflow:hidden">' + buildRichBadges( row.rich_results || '' ) + '</td>';
 				html += '</tr>';
 				html += buildDetailRow( row, offset, i );
 			}
