@@ -194,6 +194,10 @@ function dc_gi_enqueue_scripts( string $hook ): void {
 				'isBulkConfirm'              => __( 'Re-submit all NEUTRAL and FAIL URLs? This consumes your daily Indexing API quota.', 'dc-google-indexing' ),
 				'isBulkWorking'              => __( 'Working…', 'dc-google-indexing' ),
 				'isBulkError'                => __( 'Bulk re-submission failed.', 'dc-google-indexing' ),
+				'isMobileUsability'          => __( 'Mobile Usability', 'dc-google-indexing' ),
+				'isAmp'                      => __( 'AMP', 'dc-google-indexing' ),
+				'isSitemaps'                 => __( 'Sitemaps', 'dc-google-indexing' ),
+				'isViewInGsc'                => __( 'View in Google Search Console \u2192', 'dc-google-indexing' ),
 			),
 		)
 	);
@@ -1352,7 +1356,40 @@ function dc_gi_ajax_is_inspect_now(): void {
 	DC_GI_URL_Cache::upsert( $url, $fields );
 	set_transient( $lock, 1, 5 * MINUTE_IN_SECONDS );
 
-	wp_send_json_success( array( 'row' => DC_GI_URL_Cache::get_entry( $url ) ) );
+	$ir         = $result['inspectionResult'] ?? array();
+	$isr        = $ir['indexStatusResult'] ?? array();
+	$mobile_raw = $ir['mobileUsabilityResult'] ?? array();
+	$amp_raw    = $ir['ampResult'] ?? array();
+
+	wp_send_json_success(
+		array(
+			'row'          => DC_GI_URL_Cache::get_entry( $url ),
+			'inspect_link' => $result['inspectionResultLink'] ?? '',
+			'sitemap'      => array_values( array_filter( (array) ( $isr['sitemap'] ?? array() ) ) ),
+			'mobile'       => array(
+				'verdict' => (string) ( $mobile_raw['verdict'] ?? '' ),
+				'issues'  => array_map(
+					fn( $iss ) => array(
+						'type'     => (string) ( $iss['issueType'] ?? '' ),
+						'severity' => (string) ( $iss['severity'] ?? '' ),
+						'message'  => (string) ( $iss['message'] ?? '' ),
+					),
+					(array) ( $mobile_raw['issues'] ?? array() )
+				),
+			),
+			'amp'          => array(
+				'verdict' => (string) ( $amp_raw['verdict'] ?? '' ),
+				'url'     => (string) ( $amp_raw['ampUrl'] ?? '' ),
+				'issues'  => array_map(
+					fn( $iss ) => array(
+						'severity' => (string) ( $iss['severity'] ?? '' ),
+						'message'  => (string) ( $iss['issueMessage'] ?? '' ),
+					),
+					(array) ( $amp_raw['issues'] ?? array() )
+				),
+			),
+		)
+	);
 }
 
 /**

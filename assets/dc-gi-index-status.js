@@ -121,7 +121,7 @@
 		return html + '</div>';
 	}
 
-	function buildDetailRow( row, offset, i ) {
+	function buildDetailRow( row, offset, i, extra ) {
 		var gc  = row.google_canonical || '';
 		var uc  = row.user_canonical   || '';
 		var ca  = row.crawled_as        || '';
@@ -185,6 +185,63 @@
 		if ( rr ) {
 			html += '<div style="grid-column:1/-1"><span style="color:#7a8499;font-weight:600">' + esc( i18n.isRichResults ) + '</span>' + rr + '</div>';
 		}
+
+		// ── Live inspect extras (present only after an on-demand Inspect call) ──
+		if ( extra ) {
+			// Mobile Usability.
+			var mv = extra.mobile && extra.mobile.verdict ? extra.mobile.verdict : '';
+			if ( mv && 'VERDICT_UNSPECIFIED' !== mv ) {
+				var mvBadge = 'PASS' === mv
+					? '<span style="color:#00f2c3;font-weight:600">\u2713 Pass</span>'
+					: 'FAIL' === mv
+						? '<span style="color:#fd5d93;font-weight:600">\u2717 Fail</span>'
+						: '<span style="color:#ff8d72;font-weight:600">\u26a0 ' + esc( fmtState( mv ) ) + '</span>';
+				html += '<div style="grid-column:1/-1;margin-top:4px;padding-top:8px;border-top:1px solid rgba(45,53,85,.6)">'
+					+ '<span style="color:#7a8499;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px">' + esc( i18n.isMobileUsability ) + '</span>'
+					+ ' ' + mvBadge;
+				( extra.mobile.issues || [] ).forEach( function( iss ) {
+					var col = 'ERROR' === iss.severity ? '#fd5d93' : '#ff8d72';
+					html += '<div style="font-size:11px;color:' + col + ';margin-top:4px">\u26a0 ' + esc( iss.message || iss.type ) + '</div>';
+				} );
+				html += '</div>';
+			}
+
+			// AMP.
+			var av = extra.amp && extra.amp.verdict ? extra.amp.verdict : '';
+			if ( av && 'VERDICT_UNSPECIFIED' !== av ) {
+				var avBadge = 'PASS' === av
+					? '<span style="color:#00f2c3;font-weight:600">\u2713 Pass</span>'
+					: 'FAIL' === av
+						? '<span style="color:#fd5d93;font-weight:600">\u2717 Fail</span>'
+						: '<span style="color:#ff8d72;font-weight:600">\u26a0 ' + esc( fmtState( av ) ) + '</span>';
+				html += '<div style="grid-column:1/-1;margin-top:4px;padding-top:8px;border-top:1px solid rgba(45,53,85,.6)">'
+					+ '<span style="color:#7a8499;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px">' + esc( i18n.isAmp ) + '</span>'
+					+ ' ' + avBadge;
+				if ( extra.amp.url ) {
+					html += ' <a href="' + esc( extra.amp.url ) + '" target="_blank" rel="noopener noreferrer" style="color:#6ab0f5;font-size:11px">' + esc( extra.amp.url ) + '</a>';
+				}
+				( extra.amp.issues || [] ).forEach( function( iss ) {
+					var col = 'ERROR' === iss.severity ? '#fd5d93' : '#ff8d72';
+					html += '<div style="font-size:11px;color:' + col + ';margin-top:4px">\u26a0 ' + esc( iss.message ) + '</div>';
+				} );
+				html += '</div>';
+			}
+
+			// Sitemaps.
+			if ( extra.sitemap && extra.sitemap.length ) {
+				html += '<div style="grid-column:1/-1"><span style="color:#7a8499">' + esc( i18n.isSitemaps ) + ':</span> <span style="color:#c8d0e0;font-size:11px">'
+					+ extra.sitemap.map( function( s ) { return esc( s ); } ).join( ', ' )
+					+ '</span></div>';
+			}
+
+			// View in Search Console link.
+			if ( extra.inspect_link ) {
+				html += '<div style="grid-column:1/-1;margin-top:4px">'
+					+ '<a href="' + esc( extra.inspect_link ) + '" target="_blank" rel="noopener noreferrer" style="color:#6ab0f5;font-size:12px">'
+					+ esc( i18n.isViewInGsc ) + '</a></div>';
+			}
+		}
+
 		html += '<div style="grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">'
 			+ '<button type="button" class="button button-small dc-gi-is-inspect-detail-btn" data-url="' + esc( row.url ) + '">' + esc( i18n.isInspect ) + '</button>';
 		if ( 'PASS' !== row.index_verdict ) {
@@ -286,7 +343,7 @@
 			var idx        = parseInt( detailRow.getAttribute( 'data-idx' ), 10 );
 			var rowIndex   = idx - pageOffset;
 			var tmp        = document.createElement( 'tbody' );
-			tmp.innerHTML  = buildDetailRow( freshRow, pageOffset, rowIndex );
+			tmp.innerHTML  = buildDetailRow( freshRow, pageOffset, rowIndex, resp.data );
 			var newDetail  = tmp.querySelector( '.dc-gi-is-detail-row' );
 			if ( ! newDetail ) { return; }
 
