@@ -182,9 +182,9 @@
 			} );
 			var col = hasError ? '#fd5d93' : hasWarn ? '#ff8d72' : '#00f2c3';
 			var bg  = hasError ? 'rgba(253,93,147,.12)' : hasWarn ? 'rgba(255,141,114,.12)' : 'rgba(0,242,195,.12)';
-			return '<span style="display:inline-block;background:' + bg + ';color:' + col
-				+ ';border-radius:3px;padding:1px 5px;margin:1px 2px;font-size:10px;white-space:nowrap">'
-				+ esc( rtype.t || '' ) + '</span>';
+			return '<div style="background:' + bg + ';color:' + col
+				+ ';border-radius:3px;padding:1px 5px;margin-bottom:2px;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
+				+ esc( rtype.t || '' ) + '</div>';
 		} ).join( '' );
 	}
 
@@ -556,7 +556,7 @@
 					+ ' data-url="' + esc( url ) + '" title="' + esc( i18n.isInspectNow ) + '"'
 					+ ' style="padding:2px 5px;font-size:12px;line-height:1.4;min-height:0">\u21BB</button>'
 					+ '</td>';
-				html += '<td style="font-size:11px;vertical-align:middle">' + buildRichBadges( row.rich_results || '' ) + '</td>';
+				html += '<td style="font-size:11px;vertical-align:middle;max-width:160px;overflow:hidden">' + buildRichBadges( row.rich_results || '' ) + '</td>';
 				html += '</tr>';
 				html += buildDetailRow( row, offset, i );
 			}
